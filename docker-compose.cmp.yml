@@ -1,0 +1,48 @@
+
+services:
+  postgres:
+    image: postgres:18
+    container_name: cmp-postgres
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_USER: ${CMP_DB_USER}
+      POSTGRES_PASSWORD: ${CMP_DB_PASSWORD}
+      POSTGRES_DB: ${CMP_DB_NAME}
+
+    ports:
+      - "127.0.0.1:8454:5432"
+
+    volumes:
+      - cmp_postgres_data:/var/lib/postgresql
+
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  dashboard:
+    container_name: cmp-dashboard
+    build:
+      context: ./Centralized-Monitoring-Platform
+      dockerfile: Dockerfile
+
+    restart: unless-stopped
+
+    env_file:
+      - ./Centralized-Monitoring-Platform/.env
+
+    environment:
+      DATABASE_URL:  ${CMP_DATABASE_URL}
+      BETTER_AUTH_URL: http://localhost:3000
+
+    ports:
+      - "3000:3000"
+
+
+
+volumes:
+  cmp_postgres_data:
