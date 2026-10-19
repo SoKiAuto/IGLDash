@@ -143,6 +143,7 @@ export async function fetchAmrCustomers(params: {
 }
 
 export interface GroupedCustomerRow {
+  id: string
   customerId: string
   customerName: string
   address: string | null
@@ -162,6 +163,8 @@ export async function fetchAmrCustomersGrouped(params: {
   status?: string
   category?: string
   city?: string
+  sortBy?: string
+  sortDirection?: "asc" | "desc"
 }): Promise<{ items: GroupedCustomerRow[]; pagination: PaginationMeta }> {
   const page = Math.max(1, params.page ?? 1)
   const limit = Math.max(1, Math.min(100, params.limit ?? 10))
@@ -287,6 +290,7 @@ export async function fetchAmrCustomersGrouped(params: {
       custStatus = "NEW"
     }
     return {
+      id: c.customerId,
       customerId: c.customerId,
       customerName: c.customerName,
       address: c.address,
@@ -306,6 +310,35 @@ export async function fetchAmrCustomersGrouped(params: {
   }
   if (categoryFilter) {
     grouped = grouped.filter((g) => g.devices.some((d) => d.category === categoryFilter))
+  }
+
+  // Sort grouped list if requested
+  if (params.sortBy) {
+    const dir = params.sortDirection === "desc" ? -1 : 1
+    grouped.sort((a, b) => {
+      let vA: string | number = ""
+      let vB: string | number = ""
+      if (params.sortBy === "customer") {
+        vA = a.customerName || ""
+        vB = b.customerName || ""
+      } else if (params.sortBy === "meters") {
+        vA = a.deviceCount
+        vB = b.deviceCount
+      } else if (params.sortBy === "category") {
+        vA = a.category || ""
+        vB = b.category || ""
+      } else if (params.sortBy === "ga") {
+        vA = a.gaName || ""
+        vB = b.gaName || ""
+      } else if (params.sortBy === "status") {
+        vA = a.status || ""
+        vB = b.status || ""
+      }
+      if (typeof vA === "number" && typeof vB === "number") {
+        return (vA - vB) * dir
+      }
+      return String(vA).localeCompare(String(vB)) * dir
+    })
   }
 
   const totalCount = grouped.length

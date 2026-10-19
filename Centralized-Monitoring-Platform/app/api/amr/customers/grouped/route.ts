@@ -1,4 +1,4 @@
-﻿import { NextRequest, NextResponse } from "next/server"
+import { NextRequest, NextResponse } from "next/server"
 import { getSession } from "@/lib/session"
 import { fetchAmrCustomersGrouped } from "@/lib/amr-db"
 
@@ -12,8 +12,10 @@ export async function GET(req: NextRequest) {
     const status = searchParams.get("status") || undefined
     const category = searchParams.get("category") || undefined
     const city = searchParams.get("city") || undefined
+    const sortBy = searchParams.get("sortBy") || undefined
+    const sortDirection = (searchParams.get("sortDirection") as "asc" | "desc") || undefined
 
-    const result = await fetchAmrCustomersGrouped({ page, limit, search, status, category, city })
+    const result = await fetchAmrCustomersGrouped({ page, limit, search, status, category, city, sortBy, sortDirection })
     return NextResponse.json(result)
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Failed to load grouped customers"

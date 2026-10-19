@@ -9,6 +9,7 @@ import {
   Zap,
   type LucideIcon,
   Flame,
+  Users,
 } from "lucide-react"
 
 export type NavigationLink = {
@@ -55,6 +56,7 @@ export const MONITORING_ITEMS: NavigationEntry[] = [
 ]
 
 export const AMR_ITEMS: NavigationEntry[] = [
+  { title: "Customers", href: "/amr/customers", icon: Users },
   { title: "Meters", href: "/amr/meters", icon: Flame },
 ]
 
