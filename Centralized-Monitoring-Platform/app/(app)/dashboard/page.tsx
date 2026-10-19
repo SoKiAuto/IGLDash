@@ -1,4 +1,4 @@
-import { DashboardPanel } from "@/components/dashboard-panel"
+﻿import { DashboardPanel } from "@/components/dashboard-panel"
 import { ExportContextSetter } from "@/components/export-context-setter"
 import { VehicleClassChart } from "@/components/full-fill/vehicle-class-chart"
 import { AttentionCard } from "@/components/overview/attention-card"
@@ -15,6 +15,7 @@ import {
 import { UnavailableNote } from "@/components/overview/unavailable-note"
 import { UtilizationGaugeCard } from "@/components/overview/utilization-gauge-card"
 import { RangeSelector } from "@/components/range-selector"
+import { getAmrOverview, getAlarms } from "@/lib/meter-reader"
 import { compressorUtilization, countCompressors } from "@/lib/compressor-utilization"
 import { getDashboardFilters } from "@/lib/dashboard-filters"
 import { resolveRangePreset } from "@/lib/date-range"
@@ -75,7 +76,12 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
 
   const bounds = await getFillDateBounds()
   const previousRange = bounds ? getComparisonRange(range, bounds.earliest) : null
-  const data = await loadOverviewData({ station, range, previousRange })
+    const [data, amrData, amrAlarmsResult] = await Promise.all([
+    loadOverviewData({ station, range, previousRange }),
+    getAmrOverview().catch(() => null),
+    getAlarms({ limit: 4, status: "OPEN" }).catch(() => null),
+  ])
+  const amrAlarms = amrAlarmsResult?.items ?? null
   const hasComparison = previousRange !== null
 
   // Links to the detail pages keep the selected station and date range.
@@ -244,10 +250,10 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
         label: getStationName(row.station),
         values: { vehicles: row.vehicles, kg: row.kg },
         details: {
-          vehicles: `${formatInteger(row.kg)} kg · ${formatInteger(
+          vehicles: `${formatInteger(row.kg)} kg Â· ${formatInteger(
             row.activeDays > 0 ? row.vehicles / row.activeDays : 0
           )} per active day`,
-          kg: `${formatInteger(row.vehicles)} vehicles · ${perVehicle(row.kg, row.vehicles)} kg per vehicle`,
+          kg: `${formatInteger(row.vehicles)} vehicles Â· ${perVehicle(row.kg, row.vehicles)} kg per vehicle`,
         },
         uptime: uptimeByStation.get(row.station) ?? null,
       }))
@@ -258,7 +264,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
           values: { vehicles: row.fills, kg },
           details: {
             vehicles: `Full-fill rate ${formatPercent(percentOf(row.fullFills, row.fills) ?? 0)}`,
-            kg: `${formatInteger(row.fills)} fills · ${perVehicle(kg, row.fills)} kg per fill`,
+            kg: `${formatInteger(row.fills)} fills Â· ${perVehicle(kg, row.fills)} kg per fill`,
           },
         }
       })
@@ -300,11 +306,11 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
-        <ExportContextSetter context={`${stationLabel} · ${formatDate(range.from)} to ${formatDate(range.to)}`} />
+        <ExportContextSetter context={`${stationLabel} Â· ${formatDate(range.from)} to ${formatDate(range.to)}`} />
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Overview</h1>
           <p className="text-sm text-muted-foreground">
-            {stationLabel} · {formatDate(range.from)} to {formatDate(range.to)}
+            {stationLabel} Â· {formatDate(range.from)} to {formatDate(range.to)}
           </p>
         </div>
         <RangeSelector />
@@ -362,7 +368,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
         <div className="xl:col-span-2">
           <DashboardPanel
             title="Fills by vehicle class"
-            description={`Estimated from fill size, not recorded by the dispenser. ${describeVehicleClassRanges().join(" · ")}.`}
+            description={`Estimated from fill size, not recorded by the dispenser. ${describeVehicleClassRanges().join(" Â· ")}.`}
             href={link("/full-fill")}
             linkLabel="Full-fill rate"
             contentAlign="end"
@@ -410,3 +416,4 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
     </div>
   )
 }
+

@@ -36,6 +36,9 @@ yarn-error.log*
 # vercel
 .vercel
 
+# read-only behavior reference from another client's app — never commit
+/docs/ingest-reference/
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts

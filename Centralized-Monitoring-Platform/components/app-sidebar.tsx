@@ -26,7 +26,7 @@ import { UserMenu } from "@/components/user-menu"
 import {
   isActiveNavigationItem,
   isNavigationGroup,
-  NAVIGATION_ITEMS,
+  NAVIGATION_SECTIONS,
   type NavigationGroup,
 } from "@/lib/navigation"
 
@@ -163,47 +163,53 @@ export function AppSidebar({ userName, userEmail }: AppSidebarProps) {
       </SidebarHeader>
 
       <SidebarContent>
-        <SidebarGroup>
-          <SidebarGroupLabel>Monitoring</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {NAVIGATION_ITEMS.map((entry) => {
-                if (isNavigationGroup(entry)) {
-                  return (
-                    <NavGroup
-                      key={entry.title}
-                      entry={entry}
-                      pathname={pathname}
-                      query={query}
-                      isIconMode={isIconMode}
-                      onNavigate={closeMobileDrawer}
-                    />
-                  )
-                }
+        {NAVIGATION_SECTIONS.map((section) => (
+          <SidebarGroup key={section.label}>
+            <SidebarGroupLabel>{section.label}</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {section.items.map((entry) => {
+                  if (isNavigationGroup(entry)) {
+                    return (
+                      <NavGroup
+                        key={entry.title}
+                        entry={entry}
+                        pathname={pathname}
+                        query={query}
+                        isIconMode={isIconMode}
+                        onNavigate={closeMobileDrawer}
+                      />
+                    )
+                  }
 
-                return (
-                  <SidebarMenuItem key={entry.href}>
-                    <SidebarMenuButton
-                      isActive={isActiveNavigationItem(pathname, entry)}
-                      render={
-                        <Link
-                          href={`${entry.href}${query}`}
-                          // Native tooltip for icon-only mode (the sidebar `tooltip`
-                          // prop is skipped because it can override `render`).
-                          title={entry.title}
-                          onClick={closeMobileDrawer}
-                        />
-                      }
-                    >
-                      <entry.icon />
-                      <span>{entry.title}</span>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                )
-              })}
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
+                  const href = entry.href.startsWith("/amr")
+                    ? entry.href
+                    : `${entry.href}${query}`
+
+                  return (
+                    <SidebarMenuItem key={entry.href}>
+                      <SidebarMenuButton
+                        isActive={isActiveNavigationItem(pathname, entry)}
+                        render={
+                          <Link
+                            href={href}
+                            // Native tooltip for icon-only mode (the sidebar `tooltip`
+                            // prop is skipped because it can override `render`).
+                            title={entry.title}
+                            onClick={closeMobileDrawer}
+                          />
+                        }
+                      >
+                        <entry.icon />
+                        <span>{entry.title}</span>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  )
+                })}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        ))}
       </SidebarContent>
 
       <SidebarFooter>

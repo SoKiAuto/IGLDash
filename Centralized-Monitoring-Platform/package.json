@@ -9,6 +9,8 @@
     "lint": "eslint",
     "postinstall": "prisma generate",
     "db:test": "tsx scripts/test-db.ts",
+    "amr:db:init": "tsx scripts/amr-db-init.ts",
+    "amr:test": "tsx scripts/amr-test.ts",
     "user:create": "tsx scripts/create-user.ts",
     "db:refresh": "tsx scripts/refresh-views.ts"
   },

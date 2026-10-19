@@ -1,4 +1,4 @@
-import { formatDate, formatInteger } from "@/lib/format"
+import { formatDate, formatDecimal, formatInteger } from "@/lib/format"
 
 // The table of values that goes below the graph in a downloaded PDF.
 // Every cell is already formatted text, so the PDF shows exactly what the page shows.
@@ -262,5 +262,48 @@ export function measuresTable(items: [label: string, value: string][]): ExportTa
   return {
     columns: [left("Measure"), right("Value")],
     rows: items.map(([label, value]) => [label, value]),
+  }
+}
+
+// ---- meter consumption (the AMR meter page) -------------------------------------------
+
+// One value per hour or per period. Periods with a detected meter reset get a note,
+// because their value is drawn as zero.
+export function consumptionTable(
+  data: { label: string; value: number; suspect?: boolean }[],
+  labels: { category: string; series: string }
+): ExportTable {
+  const hasReset = data.some((row) => row.suspect)
+  return {
+    columns: [
+      left(labels.category),
+      right(`${labels.series} (SCM)`),
+      ...(hasReset ? [left("Note")] : []),
+    ],
+    rows: data.map((row) => [
+      row.label,
+      formatDecimal(row.value),
+      ...(hasReset ? [row.suspect ? "Meter reset detected" : ""] : []),
+    ]),
+    footer: [
+      "Total",
+      formatDecimal(sum(data.map((row) => row.value))),
+      ...(hasReset ? [""] : []),
+    ],
+  }
+}
+
+// One meter reading per row, for the historical trend graphs.
+export function readingTrendTable(
+  data: { timestamp: string; value: number | null }[],
+  valueLabel: string,
+  decimals = 2
+): ExportTable {
+  return {
+    columns: [left("Reading time"), right(valueLabel)],
+    rows: data.map((row) => [
+      row.timestamp,
+      row.value === null ? NO_VALUE : row.value.toFixed(decimals),
+    ]),
   }
 }

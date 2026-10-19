@@ -4,9 +4,11 @@ import {
   Fuel,
   LayoutDashboard,
   Gauge,
+  Gauge as GaugeMeter,
   MapPin,
   Zap,
   type LucideIcon,
+  Flame,
 } from "lucide-react"
 
 export type NavigationLink = {
@@ -16,7 +18,6 @@ export type NavigationLink = {
 
 export type NavigationItem = NavigationLink & { icon: LucideIcon }
 
-// A parent entry with sub links. The parent itself opens its first child.
 export type NavigationGroup = {
   title: string
   icon: LucideIcon
@@ -29,9 +30,7 @@ export function isNavigationGroup(entry: NavigationEntry): entry is NavigationGr
   return "children" in entry
 }
 
-// Add one entry here for each dashboard page as it is built.
-// The sidebar and the header title both read from this list.
-export const NAVIGATION_ITEMS: NavigationEntry[] = [
+export const MONITORING_ITEMS: NavigationEntry[] = [
   { title: "Overview", href: "/dashboard", icon: LayoutDashboard },
   { title: "Map view", href: "/map", icon: MapPin },
   { title: "Daily vehicles", href: "/vehicles", icon: Car },
@@ -55,7 +54,25 @@ export const NAVIGATION_ITEMS: NavigationEntry[] = [
   },
 ]
 
-// Every page link, with the sub links of groups included. Used for header titles.
+export const AMR_ITEMS: NavigationEntry[] = [
+  { title: "Meters", href: "/amr/meters", icon: Flame },
+]
+
+export type NavigationSection = {
+  label: string
+  items: NavigationEntry[]
+}
+
+export const NAVIGATION_SECTIONS: NavigationSection[] = [
+  { label: "Monitoring", items: MONITORING_ITEMS },
+  { label: "AMR", items: AMR_ITEMS },
+]
+
+export const NAVIGATION_ITEMS: NavigationEntry[] = [
+  ...MONITORING_ITEMS,
+  ...AMR_ITEMS,
+]
+
 export const FLAT_NAVIGATION_LINKS: NavigationLink[] = NAVIGATION_ITEMS.flatMap(
   (entry) => (isNavigationGroup(entry) ? entry.children : [entry])
 )

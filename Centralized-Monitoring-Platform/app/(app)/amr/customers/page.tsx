@@ -1,0 +1,1830 @@
+﻿"use client";
+
+import { useState, useEffect, useCallback, Fragment } from "react";
+import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "@/components/ui/table";
+import { Badge } from "@/components/ui/badge";
+import {
+  LayoutGrid,
+  List,
+  Search,
+  X,
+  PlusCircle,
+  AlertTriangle,
+  CheckCircle,
+  HelpCircle,
+  Pencil,
+  ChevronDown,
+  ChevronRight,
+  Check,
+  Unlink,
+} from "lucide-react";
+
+import { useAutoRefresh } from "@/lib/auto-refresh";
+import { formatLocalTs } from "@/lib/utils";
+import { parseAndValidateThresholdInputs } from "@/lib/device-field-parse";
+import {
+  ThresholdCardSet,
+  emptyThresholdFormValues,
+  thresholdFormFromDevice,
+  type ThresholdFormValues,
+} from "@/components/devices/threshold-card-set";
+
+// Customer registry for filtering, viewing, and provisioning AMR endpoints.
+interface DeviceItem {
+  id: string;
+  deviceSerialNo: string;
+  meterSerialNo: string | null;
+  meterSize: string | null;
+  firmwareVersion: string | null;
+  hardwareVersion: string | null;
+  deviceModel: string | null;
+  configurationVersion: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  pressureUpperLimit: number | null;
+  pressureLowerLimit: number | null;
+  temperatureUpperLimit: number | null;
+  temperatureLowerLimit: number | null;
+  consumptionUpperLimit: number | null;
+  consumptionLowerLimit: number | null;
+  batteryLowerLimit: number | null;
+  customerId: string | null;
+  customerName: string | null;
+  category: string | null;
+  address: string | null;
+  gaName: string | null;
+  gaId: string | null;
+  lastSeenAt: string | null;
+  status: "NEW" | "ONLINE" | "OFFLINE" | "ALERT";
+  latestReading: {
+    readingDate: string;
+    correctedVolumeVb: number | null;
+    gasPressure: number | null;
+    gasTemperature: number | null;
+    currentFlowRate: number | null;
+    batteryLevel: number | null;
+  } | null;
+}
+
+interface GeographicalArea {
+  id: string;
+  name: string;
+}
+
+interface ExistingCustomer {
+  id: string;
+  name: string;
+}
+
+interface CustomerGroup {
+  id: string;
+  name: string;
+  category: string | null;
+  address: string | null;
+  gaId: string | null;
+  gaName: string | null;
+  deviceCount: number;
+  devices: DeviceItem[];
+}
+
+type DeviceIdentityDraft = {
+  id: string;
+  deviceSerialNo: string;
+  meterSerialNo: string;
+  latitude: string;
+  longitude: string;
+  meterSize: string;
+  deviceModel: string;
+  firmwareVersion: string;
+  hardwareVersion: string;
+  configurationVersion: string;
+  category: string;
+  initial: {
+    meterSerialNo: string;
+    latitude: string;
+    longitude: string;
+    meterSize: string;
+    deviceModel: string;
+    firmwareVersion: string;
+    hardwareVersion: string;
+    configurationVersion: string;
+    category: string;
+  };
+};
+
+function numToInput(value: number | null | undefined): string {
+  return value == null ? "" : String(value);
+}
+
+function strToInput(value: string | null | undefined): string {
+  return value ?? "";
+}
+
+function deviceToIdentityDraft(device: {
+  id: string;
+  deviceSerialNo: string;
+  meterSerialNo?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  meterSize?: string | null;
+  deviceModel?: string | null;
+  firmwareVersion?: string | null;
+  hardwareVersion?: string | null;
+  configurationVersion?: string | null;
+  category?: string | null;
+}): DeviceIdentityDraft {
+  const meterSerialNo = strToInput(device.meterSerialNo);
+  const latitude = numToInput(device.latitude);
+  const longitude = numToInput(device.longitude);
+  const meterSize = strToInput(device.meterSize);
+  const deviceModel = strToInput(device.deviceModel);
+  const firmwareVersion = strToInput(device.firmwareVersion);
+  const hardwareVersion = strToInput(device.hardwareVersion);
+  const configurationVersion = strToInput(device.configurationVersion);
+  const category = strToInput(device.category);
+  return {
+    id: device.id,
+    deviceSerialNo: device.deviceSerialNo,
+    meterSerialNo,
+    latitude,
+    longitude,
+    meterSize,
+    deviceModel,
+    firmwareVersion,
+    hardwareVersion,
+    configurationVersion,
+    category,
+    initial: {
+      meterSerialNo,
+      latitude,
+      longitude,
+      meterSize,
+      deviceModel,
+      firmwareVersion,
+      hardwareVersion,
+      configurationVersion,
+      category,
+    },
+  };
+}
+
+function buildDeviceIdentityPatch(draft: DeviceIdentityDraft): Record<string, string | null> | null {
+  const patch: Record<string, string | null> = {};
+  const fields = [
+    "meterSerialNo",
+    "latitude",
+    "longitude",
+    "meterSize",
+    "deviceModel",
+    "firmwareVersion",
+    "hardwareVersion",
+    "configurationVersion",
+    "category",
+  ] as const;
+
+  for (const field of fields) {
+    const next = draft[field].trim();
+    const prev = draft.initial[field].trim();
+    if (next !== prev) {
+      patch[field] = next === "" ? null : next;
+    }
+  }
+  return Object.keys(patch).length > 0 ? patch : null;
+}
+
+export default function CustomersPage() {
+  const [customers, setCustomers] = useState<CustomerGroup[]>([]);
+  const [total, setTotal] = useState(0);
+  const [view, setView] = useState<"list" | "grid">("list");
+
+  // Filter States
+  const [page, setPage] = useState(1);
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [categoryFilter, setCategoryFilter] = useState("all");
+  const [gaFilter, setGaFilter] = useState("all");
+  const [gasList, setGasList] = useState<GeographicalArea[]>([]);
+  const [loadingRefs, setLoadingRefs] = useState(true);
+
+  // Add Customer Modal States
+  const [addCustomerModalOpen, setAddCustomerModalOpen] = useState(false);
+  const [newCustName, setNewCustName] = useState("");
+  const [newCustGaId, setNewCustGaId] = useState("");
+  const [newCustAddress, setNewCustAddress] = useState("");
+  const [newCustError, setNewCustError] = useState("");
+  const [savingNewCust, setSavingNewCust] = useState(false);
+
+  // Unassigned Devices for Meter Assignment
+  const [unassignedDevices, setUnassignedDevices] = useState<DeviceItem[]>([]);
+  const [fetchingUnassigned, setFetchingUnassigned] = useState(false);
+
+  // Drawer States
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [selectedDevice, setSelectedDevice] = useState<DeviceItem | null>(null);
+
+  // Drawer Form States
+  const [customerName, setCustomerName] = useState("");
+  const [meterIdInput, setMeterIdInput] = useState(""); // This will be uneditable
+  const [deviceIdInput, setDeviceIdInput] = useState(""); // maps to meterSerialNo
+  const [selectedCategory, setSelectedCategory] = useState("RESIDENTIAL");
+  const [address, setAddress] = useState("");
+  const [selectedGaId, setSelectedGaId] = useState("");
+  const [latitudeInput, setLatitudeInput] = useState("");
+  const [longitudeInput, setLongitudeInput] = useState("");
+  const [thresholdValues, setThresholdValues] = useState<ThresholdFormValues>(emptyThresholdFormValues());
+  const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError] = useState("");
+
+  // Provisioning Type
+  const [provisionType, setProvisionType] = useState<"new" | "existing">("new");
+  const [existingCustomers, setExistingCustomers] = useState<ExistingCustomer[]>([]);
+  const [selectedExistingCustomerId, setSelectedExistingCustomerId] = useState("");
+
+  // Confirmation Dialog
+  const [showConfirmDialog, setShowConfirmDialog] = useState(false);
+  const [editingCustomer, setEditingCustomer] = useState<DeviceItem | null>(null);
+  const [editCustomerName, setEditCustomerName] = useState("");
+  const [editAddress, setEditAddress] = useState("");
+  const [editGaId, setEditGaId] = useState("");
+  const [editError, setEditError] = useState("");
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [editDeviceDrafts, setEditDeviceDrafts] = useState<DeviceIdentityDraft[]>([]);
+  const [expandedEditDeviceId, setExpandedEditDeviceId] = useState<string | null>(null);
+  const [loadingEditDevices, setLoadingEditDevices] = useState(false);
+  const [pendingDetach, setPendingDetach] = useState<DeviceIdentityDraft | null>(null);
+  const [detachingMeter, setDetachingMeter] = useState(false);
+  const [detachError, setDetachError] = useState("");
+
+  // Expandable threshold editing (list view) — single-expand (table is paginated)
+  const [expandedCustomerId, setExpandedCustomerId] = useState<string | null>(null);
+  const [expandedDeviceId, setExpandedDeviceId] = useState<string | null>(null);
+  const [rowThresholds, setRowThresholds] = useState<ThresholdFormValues>(emptyThresholdFormValues());
+  const [thresholdError, setThresholdError] = useState("");
+  const [savingThresholds, setSavingThresholds] = useState(false);
+  const [thresholdSavedId, setThresholdSavedId] = useState<string | null>(null);
+
+  const limit = 12;
+
+  // Fetch Geographical Areas
+  const fetchGas = useCallback(async () => {
+    const res = await fetch("/api/amr/gas");
+    if (res.ok) {
+      const data = await res.json();
+      setGasList(data);
+    }
+    setLoadingRefs((prev) => prev && false);
+  }, []);
+
+  // Fetch Customers
+  const fetchDevices = useCallback(async () => {
+    const params = new URLSearchParams({
+      page: page.toString(),
+      limit: limit.toString(),
+      search: search.trim(),
+    });
+
+    if (statusFilter !== "all") params.append("status", statusFilter);
+    if (categoryFilter !== "all") params.append("category", categoryFilter);
+    if (gaFilter !== "all") params.append("gaId", gaFilter);
+
+    const res = await fetch(`/api/amr/customers/grouped?${params}`);
+    if (res.ok) {
+      const data = await res.json();
+      setCustomers(data.items || []);
+      setTotal(data.pagination.totalCount || 0);
+    }
+  }, [page, search, statusFilter, categoryFilter, gaFilter]);
+
+  // Fetch Existing Customers
+  const fetchExistingCustomers = useCallback(async () => {
+    const res = await fetch("/api/amr/customers?limit=1000");
+    if (res.ok) {
+      const data = await res.json();
+      setExistingCustomers(data.data || []);
+    }
+    setLoadingRefs((prev) => prev && false);
+  }, []);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    fetchGas();
+    fetchExistingCustomers();
+  }, [fetchGas, fetchExistingCustomers]);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    fetchDevices();
+  }, [fetchDevices]);
+  useAutoRefresh(fetchDevices);
+
+  const totalPages = Math.ceil(total / limit) || 1;
+
+  const getCustomerStatusSummary = (customer: CustomerGroup) => {
+    if (customer.devices.length === 0) return "NEW";
+    const ordered = ["ALERT", "OFFLINE", "NEW", "ONLINE"] as const;
+    return ordered.find((status) => customer.devices.some((device) => device.status === status)) || "ONLINE";
+  };
+
+  const openCustomerEditor = async (customerLike: CustomerGroup | DeviceItem) => {
+    const customerId = "devices" in customerLike ? customerLike.id : customerLike.customerId;
+    const customerName = "devices" in customerLike ? customerLike.name : customerLike.customerName ?? "";
+    const address = "devices" in customerLike ? customerLike.address ?? "" : customerLike.address ?? "";
+    const gaId = "devices" in customerLike ? customerLike.gaId ?? "" : customerLike.gaId ?? "";
+    const seedDevice = "devices" in customerLike ? customerLike.devices[0] : customerLike;
+
+    if (!customerId || !seedDevice) return;
+
+    setEditingCustomer(seedDevice);
+    setEditCustomerName(customerName);
+    setEditAddress(address);
+    setEditGaId(gaId);
+    setEditError("");
+    setExpandedEditDeviceId(null);
+    setEditDeviceDrafts([deviceToIdentityDraft(seedDevice)]);
+    setLoadingEditDevices(true);
+    try {
+      const res = await fetch(`/api/amr/customers/${customerId}`);
+      if (res.ok) {
+        const customer = await res.json();
+        const drafts = (customer.devices ?? []).map(
+          (d: {
+            id: string;
+            deviceSerialNo: string;
+            meterSerialNo?: string | null;
+            latitude?: number | null;
+            longitude?: number | null;
+            meterSize?: string | null;
+            deviceModel?: string | null;
+            firmwareVersion?: string | null;
+            hardwareVersion?: string | null;
+            configurationVersion?: string | null;
+            category?: string | null;
+          }) => deviceToIdentityDraft(d),
+        );
+        setEditDeviceDrafts(drafts);
+      }
+    } catch {
+      // Keep the single-device draft already seeded from the row.
+    } finally {
+      setLoadingEditDevices(false);
+    }
+  };
+
+  const openAddCustomerModal = () => {
+    setNewCustName("");
+    setNewCustGaId(gasList[0]?.id || "");
+    setNewCustAddress("");
+    setNewCustError("");
+    setAddCustomerModalOpen(true);
+  };
+
+  const handleAddCustomerSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newCustName.trim()) {
+      setNewCustError("Customer name is required.");
+      return;
+    }
+    if (!newCustGaId) {
+      setNewCustError("Geographical area (City) is required.");
+      return;
+    }
+
+    setSavingNewCust(true);
+    setNewCustError("");
+
+    try {
+      const res = await fetch("/api/amr/customers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: newCustName.trim(),
+          gaId: newCustGaId,
+          address: newCustAddress.trim() || null,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to create customer");
+
+      setAddCustomerModalOpen(false);
+      fetchDevices();
+      fetchExistingCustomers();
+    } catch (err: unknown) {
+      setNewCustError(err instanceof Error ? err.message : "Failed to create customer");
+    } finally {
+      setSavingNewCust(false);
+    }
+  };
+
+  const fetchUnassignedDevices = async () => {
+    setFetchingUnassigned(true);
+    try {
+      const res = await fetch("/api/amr/devices?status=new&limit=100");
+      if (res.ok) {
+        const data = await res.json();
+        setUnassignedDevices(data.items || []);
+        return data.items || [];
+      }
+    } catch {
+      // Fallback
+    } finally {
+      setFetchingUnassigned(false);
+    }
+    return [];
+  };
+
+  const openAddMeterForCustomer = async (customer: CustomerGroup) => {
+    const existingDevice = customer.devices[0] || null;
+    setSelectedDevice(existingDevice);
+    setProvisionType("existing");
+    setSelectedExistingCustomerId(customer.id);
+    setCustomerName(customer.name);
+    setMeterIdInput(existingDevice?.deviceSerialNo || "");
+    setDeviceIdInput("");
+    setSelectedCategory("RESIDENTIAL");
+    setAddress(customer.address ?? "");
+    setSelectedGaId(customer.gaId ?? gasList[0]?.id ?? "");
+    setLatitudeInput("");
+    setLongitudeInput("");
+    setThresholdValues(emptyThresholdFormValues());
+    setFormError("");
+    setDrawerOpen(true);
+
+    const unassigned = await fetchUnassignedDevices();
+    if (!existingDevice && unassigned.length > 0) {
+      setSelectedDevice(unassigned[0]);
+      setMeterIdInput(unassigned[0].deviceSerialNo);
+      if (unassigned[0].latitude) setLatitudeInput(String(unassigned[0].latitude));
+      if (unassigned[0].longitude) setLongitudeInput(String(unassigned[0].longitude));
+      setThresholdValues(thresholdFormFromDevice(unassigned[0]));
+    }
+  };
+
+  const updateEditDeviceDraft = (
+    deviceId: string,
+    field: keyof Omit<DeviceIdentityDraft, "id" | "deviceSerialNo" | "initial">,
+    value: string,
+  ) => {
+    setEditDeviceDrafts((prev) =>
+      prev.map((d) => (d.id === deviceId ? { ...d, [field]: value } : d)),
+    );
+  };
+
+  const detachMeterFromCustomer = async () => {
+    if (!pendingDetach) return;
+
+    setDetachingMeter(true);
+    setDetachError("");
+    try {
+      const response = await fetch(`/api/amr/devices/${pendingDetach.id}/assign`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ customerId: null }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? "Failed to detach meter");
+
+      setEditDeviceDrafts((drafts) =>
+        drafts.filter((draft) => draft.id !== pendingDetach.id),
+      );
+      setExpandedEditDeviceId((deviceId) =>
+        deviceId === pendingDetach.id ? null : deviceId,
+      );
+      setPendingDetach(null);
+      fetchDevices();
+    } catch (error) {
+      setDetachError(error instanceof Error ? error.message : "Failed to detach meter");
+    } finally {
+      setDetachingMeter(false);
+    }
+  };
+
+  const saveCustomerEdit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!editingCustomer?.customerId || !editCustomerName.trim() || !editGaId) {
+      setEditError("Customer name and geographical area are required.");
+      return;
+    }
+
+    for (const draft of editDeviceDrafts) {
+      if (draft.latitude.trim() || draft.longitude.trim()) {
+        const lat = Number(draft.latitude);
+        const lng = Number(draft.longitude);
+        if (draft.latitude.trim() && (!Number.isFinite(lat) || lat < -90 || lat > 90)) {
+          setEditError(`Latitude for ${draft.deviceSerialNo} must be between -90 and 90.`);
+          return;
+        }
+        if (draft.longitude.trim() && (!Number.isFinite(lng) || lng < -180 || lng > 180)) {
+          setEditError(`Longitude for ${draft.deviceSerialNo} must be between -180 and 180.`);
+          return;
+        }
+      }
+    }
+
+    setSavingEdit(true);
+    setEditError("");
+    try {
+      const response = await fetch(`/api/amr/customers/${editingCustomer.customerId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: editCustomerName.trim(),
+          address: editAddress.trim() || null,
+          gaId: editGaId,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? "Failed to update customer");
+
+      for (const draft of editDeviceDrafts) {
+        const patch = buildDeviceIdentityPatch(draft);
+        if (!patch) continue;
+        const deviceRes = await fetch(`/api/amr/devices/${draft.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(patch),
+        });
+        const deviceData = await deviceRes.json();
+        if (!deviceRes.ok) {
+          throw new Error(deviceData.error ?? `Failed to update device ${draft.deviceSerialNo}`);
+        }
+      }
+
+      setEditingCustomer(null);
+      fetchDevices();
+    } catch (error) {
+      setEditError(error instanceof Error ? error.message : "Failed to update customer");
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
+  const toggleThresholdExpand = (device: DeviceItem) => {
+    if (expandedDeviceId === device.id) {
+      setExpandedDeviceId(null);
+      setThresholdError("");
+      setThresholdSavedId(null);
+      return;
+    }
+    setExpandedDeviceId(device.id);
+    setRowThresholds(thresholdFormFromDevice(device));
+    setThresholdError("");
+    setThresholdSavedId(null);
+  };
+
+  const saveRowThresholds = async (deviceId: string) => {
+    const parsed = parseAndValidateThresholdInputs(rowThresholds);
+    if (!parsed.ok) {
+      setThresholdError(parsed.error);
+      return;
+    }
+    setSavingThresholds(true);
+    setThresholdError("");
+    try {
+      const res = await fetch(`/api/amr/devices/${deviceId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(parsed.values),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to save thresholds");
+      setThresholdSavedId(deviceId);
+      setTimeout(() => setThresholdSavedId((id) => (id === deviceId ? null : id)), 2500);
+      fetchDevices();
+    } catch (err: unknown) {
+      setThresholdError(err instanceof Error ? err.message : "Failed to save thresholds");
+    } finally {
+      setSavingThresholds(false);
+    }
+  };
+
+  // Open Drawer Form for Provisioning
+  const openProvisionDrawer = (device: DeviceItem) => {
+    if (loadingRefs) return;
+    setSelectedDevice(device);
+    setProvisionType("new");
+    setSelectedExistingCustomerId("");
+    setCustomerName("");
+    setMeterIdInput(device.deviceSerialNo);
+    setDeviceIdInput("");
+    setSelectedCategory("RESIDENTIAL");
+    setAddress("");
+    setSelectedGaId(gasList[0]?.id || "");
+    setLatitudeInput("");
+    setLongitudeInput("");
+    setThresholdValues(emptyThresholdFormValues());
+    setFormError("");
+    setDrawerOpen(true);
+  };
+
+  // Submit Provisioning Form
+  const handleProvisionSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const targetDeviceId = selectedDevice?.id || meterIdInput.trim();
+    if (!targetDeviceId) {
+      setFormError("Please select an available meter or enter a meter serial number.");
+      return;
+    }
+
+    if (provisionType === "new" && !customerName.trim()) {
+      setFormError("Customer name is required.");
+      return;
+    }
+
+    if (provisionType === "existing" && !selectedExistingCustomerId) {
+      setFormError("Please select an existing customer.");
+      return;
+    }
+
+    if (!latitudeInput.trim() || !longitudeInput.trim()) {
+      setFormError("Latitude and longitude are required for provisioning.");
+      return;
+    }
+    const latitude = Number(latitudeInput);
+    const longitude = Number(longitudeInput);
+    if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90) {
+      setFormError("Latitude must be a number between -90 and 90.");
+      return;
+    }
+    if (!Number.isFinite(longitude) || longitude < -180 || longitude > 180) {
+      setFormError("Longitude must be a number between -180 and 180.");
+      return;
+    }
+
+    const thresholdCheck = parseAndValidateThresholdInputs(thresholdValues);
+    if (!thresholdCheck.ok) {
+      setFormError(thresholdCheck.error);
+      return;
+    }
+
+    setFormError("");
+    setShowConfirmDialog(true);
+  };
+
+  const confirmProvisioning = async () => {
+    const targetDeviceId = selectedDevice?.id || meterIdInput.trim();
+    if (!targetDeviceId) return;
+
+    setSubmitting(true);
+    setFormError("");
+    setShowConfirmDialog(false);
+
+    try {
+      const thresholdCheck = parseAndValidateThresholdInputs(thresholdValues);
+      if (!thresholdCheck.ok) {
+        throw new Error(thresholdCheck.error);
+      }
+
+      const bodyPayload: Record<string, unknown> = {
+        provision: true,
+        category: selectedCategory,
+        meterSerialNo: deviceIdInput || null,
+        latitude: latitudeInput.trim(),
+        longitude: longitudeInput.trim(),
+        ...thresholdCheck.values,
+      };
+
+      if (provisionType === "existing") {
+        bodyPayload.existingCustomerId = selectedExistingCustomerId;
+      } else {
+        bodyPayload.customerName = customerName;
+        bodyPayload.address = address;
+        bodyPayload.gaId = selectedGaId;
+      }
+
+      const res = await fetch(`/api/amr/devices/${targetDeviceId}/assign`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(bodyPayload),
+      });
+
+      if (!res.ok) {
+        const errData = await res.json();
+        throw new Error(errData.error || "Failed to provision device");
+      }
+
+      setDrawerOpen(false);
+      fetchDevices();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "An error occurred during submission.";
+      setFormError(message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // Render Status Badge
+  const renderStatus = (device: DeviceItem) => {
+    switch (device.status) {
+      case "NEW":
+        return (
+          <Badge
+            onClick={() => openProvisionDrawer(device)}
+            className="bg-[color:var(--clr-new)]/10 text-[color:var(--clr-new)] border border-[color:var(--clr-new)]/25 hover:bg-[color:var(--clr-new)] hover:text-[color:var(--sidebar-primary-foreground)] transition-all cursor-pointer font-bold select-none animate-pulse"
+          >
+            NEW
+          </Badge>
+        );
+      case "ONLINE":
+        return (
+          <Badge className="bg-[color:var(--clr-online)]/10 text-[color:var(--clr-online)] border border-[color:var(--clr-online)]/25 font-bold">
+            <CheckCircle className="w-3 h-3 mr-1 animate-pulse" />
+            ONLINE
+          </Badge>
+        );
+      case "OFFLINE":
+        return (
+          <Badge className="bg-[color:var(--clr-offline)]/10 text-[color:var(--clr-offline)] border border-[color:var(--clr-offline)]/25 font-bold">
+            <X className="w-3 h-3 mr-1" />
+            OFFLINE
+          </Badge>
+        );
+      case "ALERT":
+        return (
+          <Badge className="bg-[color:var(--clr-alert)]/10 text-[color:var(--clr-alert)] border border-[color:var(--clr-alert)]/25 font-bold">
+            <AlertTriangle className="w-3 h-3 mr-1 animate-bounce" />
+            ALERT
+          </Badge>
+        );
+      default:
+        return (
+          <Badge className="bg-[color:var(--clr-offline)]/10 text-[color:var(--clr-offline)] border border-[color:var(--clr-offline)]/25">
+            <HelpCircle className="w-3 h-3 mr-1" />
+            UNKNOWN
+          </Badge>
+        );
+    }
+  };
+
+  // Helper formatting function
+  const fmt = (val: number | null | undefined, decimals = 2) => {
+    if (val == null) return "—";
+    return val.toLocaleString(undefined, {
+      minimumFractionDigits: decimals,
+      maximumFractionDigits: decimals,
+    });
+  };
+
+  return (
+    <div className="space-y-6 w-full">
+      {/* Header and Toggle */}
+      <div className="flex justify-between items-center border-b border-border pb-5">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight text-foreground">AMR Customer Registry</h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            Registered endpoints - Industrial, Commercial, Residential, DRS, CNG, and PNG.
+          </p>
+        </div>
+        <div className="flex items-center space-x-3">
+          <Button
+            onClick={openAddCustomerModal}
+            className="h-9 px-4 text-xs font-semibold bg-[color:var(--clr-accent-hi)] text-[color:var(--accent-foreground)] hover:bg-[color:var(--clr-accent-hi)]/90 shadow-sm"
+          >
+            <PlusCircle className="w-4 h-4 mr-1.5" />
+            Add Customer
+          </Button>
+          <div className="flex space-x-1 bg-secondary p-1 rounded-lg border border-border">
+            <Button
+              variant={view === "list" ? "default" : "ghost"}
+              size="sm"
+              onClick={() => setView("list")}
+              className="h-8 px-3 text-xs"
+            >
+              <List className="w-3.5 h-3.5 mr-1.5" />
+              List View
+            </Button>
+            <Button
+              variant={view === "grid" ? "default" : "ghost"}
+              size="sm"
+              onClick={() => setView("grid")}
+              className="h-8 px-3 text-xs"
+            >
+              <LayoutGrid className="w-3.5 h-3.5 mr-1.5" />
+              Grid View
+            </Button>
+          </div>
+        </div>
+      </div>
+
+      {/* Advanced Filter Controls Bar */}
+      <Card className="bg-card border-border p-4 flex flex-col md:flex-row items-center gap-4">
+        {/* Search */}
+        <div className="relative w-full md:w-80">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          <Input
+            placeholder="Search customer name or ID..."
+            value={search}
+            onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+            className="pl-9 bg-background border-border text-foreground placeholder:text-muted-foreground focus:border-[color:var(--clr-accent-hi)]"
+          />
+        </div>
+
+        {/* Filters */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 w-full md:w-auto md:ml-auto">
+          {/* Geographical Area Filter */}
+          <select
+            className="h-9 px-3 py-1 rounded-md bg-background border border-border text-sm text-foreground focus:outline-none focus:border-[color:var(--clr-accent-hi)]"
+            value={gaFilter}
+            onChange={(e) => { setGaFilter(e.target.value); setPage(1); }}
+          >
+            <option value="all">All Cities</option>
+            {gasList.map((ga) => (
+              <option key={ga.id} value={ga.id}>{ga.name}</option>
+            ))}
+          </select>
+
+          {/* Status Filter */}
+          <select
+            className="h-9 px-3 py-1 rounded-md bg-background border border-border text-sm text-foreground focus:outline-none focus:border-[color:var(--clr-accent-hi)]"
+            value={statusFilter}
+            onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}
+          >
+            <option value="all">All Statuses</option>
+            <option value="NEW">New (Unprovisioned)</option>
+            <option value="ONLINE">Online</option>
+            <option value="OFFLINE">Offline</option>
+            <option value="ALERT">Alert</option>
+          </select>
+
+          {/* Category Filter */}
+          <select
+            className="h-9 px-3 py-1 rounded-md bg-background border border-border text-sm text-foreground focus:outline-none focus:border-[color:var(--clr-accent-hi)]"
+            value={categoryFilter}
+            onChange={(e) => { setCategoryFilter(e.target.value); setPage(1); }}
+          >
+            <option value="all">All Categories</option>
+            <option value="COMMERCIAL">Commercial</option>
+            <option value="RESIDENTIAL">Residential</option>
+            <option value="DRS">DRS</option>
+            <option value="INDUSTRIAL_CNG">Industrial CNG</option>
+            <option value="INDUSTRIAL_PNG">Industrial PNG</option>
+          </select>
+        </div>
+      </Card>
+
+      {/* Grid View */}
+      {view === "grid" ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+          {customers.map((customer) => {
+            const leadingDevice = customer.devices[0];
+            const summaryStatus = getCustomerStatusSummary(customer);
+
+            return (
+              <Card
+                key={customer.id}
+                className="bg-card border-border hover:border-[color:var(--clr-accent-mid)] transition-all shadow-sm flex flex-col justify-between"
+              >
+                <CardHeader className="pb-3">
+                  <div className="flex justify-between items-start gap-3">
+                    <div className="min-w-0">
+                      <CardTitle className="text-base font-bold text-card-foreground truncate max-w-[200px]">
+                        {customer.name}
+                      </CardTitle>
+                      <p className="text-xs text-muted-foreground mt-0.5 font-mono select-all">
+                        {customer.deviceCount} meter{customer.deviceCount === 1 ? "" : "s"}
+                      </p>
+                    </div>
+                    <Badge
+                      className={
+                        summaryStatus === "ALERT"
+                          ? "bg-[color:var(--clr-alert)]/10 text-[color:var(--clr-alert)] border border-[color:var(--clr-alert)]/25 font-bold"
+                          : summaryStatus === "OFFLINE"
+                            ? "bg-[color:var(--clr-offline)]/10 text-[color:var(--clr-offline)] border border-[color:var(--clr-offline)]/25 font-bold"
+                            : summaryStatus === "NEW"
+                              ? "bg-[color:var(--clr-new)]/10 text-[color:var(--clr-new)] border border-[color:var(--clr-new)]/25 hover:bg-[color:var(--clr-new)] hover:text-[color:var(--sidebar-primary-foreground)] transition-all cursor-default font-bold select-none"
+                              : "bg-[color:var(--clr-online)]/10 text-[color:var(--clr-online)] border border-[color:var(--clr-online)]/25 font-bold"
+                      }
+                    >
+                      {summaryStatus}
+                    </Badge>
+                  </div>
+                  <div className="flex gap-2 mt-2 flex-wrap">
+                    <Badge variant="secondary" className="text-[10px] py-0 px-2 font-medium">
+                      {customer.category || "N/A"}
+                    </Badge>
+                    <Badge variant="outline" className="text-[10px] py-0 px-2">
+                      {customer.gaName || "No GA"}
+                    </Badge>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-4 pt-0">
+                  <div className="space-y-2">
+                    {customer.devices.map((device) => (
+                      <div key={device.id} className="rounded-lg border border-border bg-muted/40 p-2.5">
+                        <div className="flex items-center justify-between gap-2 mb-2">
+                          <span className="font-mono text-[11px] text-muted-foreground truncate">{device.deviceSerialNo}</span>
+                          {renderStatus(device)}
+                        </div>
+                        <div className="grid grid-cols-3 gap-2">
+                          <div className="text-center">
+                            <span className="text-[9px] uppercase tracking-wider text-muted-foreground block">Flow</span>
+                            <span className="font-mono text-[11px] font-bold text-[color:var(--clr-accent-hi)]">
+                              {fmt(device.latestReading?.currentFlowRate)}
+                            </span>
+                          </div>
+                          <div className="text-center border-x border-border">
+                            <span className="text-[9px] uppercase tracking-wider text-muted-foreground block">Pressure</span>
+                            <span className="font-mono text-[11px] font-bold text-[color:var(--clr-commercial)]">
+                              {fmt(device.latestReading?.gasPressure)}
+                            </span>
+                          </div>
+                          <div className="text-center">
+                            <span className="text-[9px] uppercase tracking-wider text-muted-foreground block">Battery</span>
+                            <span className="font-mono text-[11px] font-bold text-[color:var(--clr-online)]">
+                              {device.latestReading?.batteryLevel != null ? `${Math.round(device.latestReading.batteryLevel)}%` : "—"}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="text-xs text-muted-foreground space-y-1.5">
+                    <p className="truncate"><strong>Address:</strong> {customer.address || "—"}</p>
+                    <p>
+                      <strong>Last Updated:</strong>{" "}
+                      {leadingDevice?.latestReading?.readingDate
+                        ? formatLocalTs(leadingDevice.latestReading.readingDate)
+                        : (leadingDevice?.lastSeenAt ? formatLocalTs(leadingDevice.lastSeenAt) : "No readings")}
+                    </p>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-2 pt-2 border-t border-border">
+                    <Button type="button" variant="outline" size="sm" onClick={() => openCustomerEditor(customer)} className="h-8 text-xs">
+                      <Pencil className="mr-1 h-3.5 w-3.5" />
+                      Edit
+                    </Button>
+                    <Button type="button" size="sm" onClick={() => openAddMeterForCustomer(customer)} className="h-8 text-xs bg-[color:var(--clr-accent-hi)] text-[color:var(--accent-foreground)] hover:bg-[color:var(--clr-accent-hi)]">
+                      <PlusCircle className="mr-1 h-3.5 w-3.5" />
+                      Add Meter
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })}
+          {customers.length === 0 && (
+            <div className="col-span-full text-center text-muted-foreground py-12">
+              No registered endpoints matching the filter criteria.
+            </div>
+          )}
+        </div>
+      ) : (
+        /* List View (Table) */
+        <Card className="bg-card border-border overflow-hidden">
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader className="bg-muted border-b border-border">
+                <TableRow className="border-border hover:bg-transparent">
+                  <TableHead className="w-10 text-muted-foreground font-semibold" />
+                  <TableHead className="text-muted-foreground font-semibold">Customer</TableHead>
+                  <TableHead className="text-muted-foreground font-semibold">Meters</TableHead>
+                  <TableHead className="text-muted-foreground font-semibold">Category</TableHead>
+                  <TableHead className="text-muted-foreground font-semibold">GA / Address</TableHead>
+                  <TableHead className="text-muted-foreground font-semibold">Status</TableHead>
+                  <TableHead className="text-right text-muted-foreground font-semibold">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {customers.map((customer) => {
+                  const isExpanded = expandedCustomerId === customer.id;
+                  const summaryStatus = getCustomerStatusSummary(customer);
+                  const alertCount = customer.devices.filter((device) => device.status === "ALERT").length;
+
+                  return (
+                    <Fragment key={customer.id}>
+                      <TableRow className="border-border hover:bg-muted/60">
+                        <TableCell className="py-3 w-10">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7 text-muted-foreground"
+                            onClick={() => setExpandedCustomerId(isExpanded ? null : customer.id)}
+                            aria-label={isExpanded ? "Collapse customer" : "Expand customer"}
+                          >
+                            {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                          </Button>
+                        </TableCell>
+                        <TableCell className="font-semibold text-foreground py-3 max-w-[220px]">
+                          <div className="space-y-1">
+                            <p className="truncate">{customer.name}</p>
+                            <div className="flex flex-wrap gap-1">
+                              <Badge variant="outline" className="text-[10px]">{customer.deviceCount} meter{customer.deviceCount === 1 ? "" : "s"}</Badge>
+                              {alertCount > 0 && <Badge className="bg-[color:var(--clr-alert)]/10 text-[color:var(--clr-alert)] border border-[color:var(--clr-alert)]/25 text-[10px]">{alertCount} alert{alertCount === 1 ? "" : "s"}</Badge>}
+                            </div>
+                          </div>
+                        </TableCell>
+                        <TableCell className="font-mono text-sm text-muted-foreground select-all">{customer.deviceCount}</TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className="text-[10px]">{customer.category || "—"}</Badge>
+                        </TableCell>
+                        <TableCell className="text-sm text-muted-foreground max-w-[220px]">
+                          <div className="space-y-1">
+                            <p className="truncate">{customer.gaName || "No GA"}</p>
+                            <p className="truncate">{customer.address || "—"}</p>
+                          </div>
+                        </TableCell>
+                        <TableCell className="py-3">
+                          {summaryStatus === "ALERT" ? (
+                            <Badge className="bg-[color:var(--clr-alert)]/10 text-[color:var(--clr-alert)] border border-[color:var(--clr-alert)]/25 font-bold">
+                              <AlertTriangle className="w-3 h-3 mr-1 animate-bounce" />
+                              ALERT
+                            </Badge>
+                          ) : summaryStatus === "OFFLINE" ? (
+                            <Badge className="bg-[color:var(--clr-offline)]/10 text-[color:var(--clr-offline)] border border-[color:var(--clr-offline)]/25 font-bold">
+                              <X className="w-3 h-3 mr-1" />
+                              OFFLINE
+                            </Badge>
+                          ) : summaryStatus === "NEW" ? (
+                            <Badge className="bg-[color:var(--clr-new)]/10 text-[color:var(--clr-new)] border border-[color:var(--clr-new)]/25 hover:bg-[color:var(--clr-new)] hover:text-[color:var(--sidebar-primary-foreground)] transition-all cursor-default font-bold select-none animate-pulse">
+                              NEW
+                            </Badge>
+                          ) : (
+                            <Badge className="bg-[color:var(--clr-online)]/10 text-[color:var(--clr-online)] border border-[color:var(--clr-online)]/25 font-bold">
+                              <CheckCircle className="w-3 h-3 mr-1 animate-pulse" />
+                              ONLINE
+                            </Badge>
+                          )}
+                        </TableCell>
+                        <TableCell className="py-3 text-right">
+                          <Button type="button" variant="ghost" size="sm" onClick={() => openCustomerEditor(customer)} className="text-muted-foreground hover:text-foreground">
+                            <Pencil className="mr-1 h-3.5 w-3.5" />
+                            Edit
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                      {isExpanded && (
+                        <TableRow className="border-border bg-muted/30 hover:bg-muted/30">
+                          <TableCell colSpan={7} className="px-3 py-3">
+                            <div className="space-y-3">
+                              <div className="flex items-center justify-between gap-3">
+                                <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                                  Devices for {customer.name}
+                                </p>
+                                <Button type="button" size="sm" onClick={() => openAddMeterForCustomer(customer)} className="h-7 px-3 text-xs bg-[color:var(--clr-accent-hi)] text-[color:var(--accent-foreground)] hover:bg-[color:var(--clr-accent-hi)]">
+                                  <PlusCircle className="mr-1 h-3.5 w-3.5" />
+                                  Add Meter
+                                </Button>
+                              </div>
+                              <div className="rounded-lg border border-border bg-background overflow-hidden">
+                                <Table>
+                                  <TableHeader className="bg-muted border-b border-border">
+                                    <TableRow className="border-border hover:bg-transparent">
+                                      <TableHead className="w-10 text-muted-foreground font-semibold" />
+                                      <TableHead className="text-muted-foreground font-semibold">Customer Name</TableHead>
+                                      <TableHead className="text-muted-foreground font-semibold">Meter ID</TableHead>
+                                      <TableHead className="text-muted-foreground font-semibold">Device ID</TableHead>
+                                      <TableHead className="text-muted-foreground font-semibold">Category</TableHead>
+                                      <TableHead className="text-muted-foreground font-semibold">Address</TableHead>
+                                      <TableHead className="text-muted-foreground font-semibold">Flow (SCMH)</TableHead>
+                                      <TableHead className="text-muted-foreground font-semibold">Pressure</TableHead>
+                                      <TableHead className="text-muted-foreground font-semibold">Battery</TableHead>
+                                      <TableHead className="text-muted-foreground font-semibold">Status</TableHead>
+                                      <TableHead className="text-right text-muted-foreground font-semibold">Actions</TableHead>
+                                    </TableRow>
+                                  </TableHeader>
+                                  <TableBody>
+                                    {customer.devices.map((device) => {
+                                      const isDeviceExpanded = expandedDeviceId === device.id;
+
+                                      return (
+                                        <Fragment key={device.id}>
+                                          <TableRow className="border-border hover:bg-muted/60">
+                                            <TableCell className="py-3 w-10">
+                                              {device.customerId ? (
+                                                <Button
+                                                  type="button"
+                                                  variant="ghost"
+                                                  size="icon"
+                                                  className="h-7 w-7 text-muted-foreground"
+                                                  onClick={() => toggleThresholdExpand(device)}
+                                                  aria-label={isDeviceExpanded ? "Collapse thresholds" : "Expand thresholds"}
+                                                >
+                                                  {isDeviceExpanded ? (
+                                                    <ChevronDown className="h-4 w-4" />
+                                                  ) : (
+                                                    <ChevronRight className="h-4 w-4" />
+                                                  )}
+                                                </Button>
+                                              ) : (
+                                                <span className="inline-block w-7" />
+                                              )}
+                                            </TableCell>
+                                            <TableCell className="font-semibold text-foreground py-3 max-w-[150px] truncate">
+                                              {device.customerName || customer.name}
+                                            </TableCell>
+                                            <TableCell className="font-mono text-sm text-muted-foreground select-all">{device.deviceSerialNo}</TableCell>
+                                            <TableCell className="font-mono text-sm text-muted-foreground select-all">{device.meterSerialNo || "—"}</TableCell>
+                                            <TableCell>
+                                              <Badge variant="outline" className="text-[10px]">{device.category || "—"}</Badge>
+                                            </TableCell>
+                                            <TableCell className="text-sm text-muted-foreground max-w-[180px] truncate">{device.address || "—"}</TableCell>
+                                            <TableCell className="font-mono text-sm font-semibold text-[color:var(--clr-accent-hi)]">
+                                              {fmt(device.latestReading?.currentFlowRate)}
+                                            </TableCell>
+                                            <TableCell className="font-mono text-sm font-semibold text-[color:var(--clr-commercial)]">
+                                              {device.latestReading?.gasPressure != null ? `${fmt(device.latestReading.gasPressure)} bar` : "—"}
+                                            </TableCell>
+                                            <TableCell className="font-mono text-sm font-semibold text-[color:var(--clr-online)]">
+                                              {device.latestReading?.batteryLevel != null ? `${Math.round(device.latestReading.batteryLevel)}%` : "—"}
+                                            </TableCell>
+                                            <TableCell className="py-3">{renderStatus(device)}</TableCell>
+                                            <TableCell className="py-3 text-right">
+                                              <Button type="button" variant="ghost" size="sm" onClick={() => openCustomerEditor(customer)} className="text-muted-foreground hover:text-foreground">
+                                                <Pencil className="mr-1 h-3.5 w-3.5" />
+                                                Edit
+                                              </Button>
+                                            </TableCell>
+                                          </TableRow>
+                                          {isDeviceExpanded && (
+                                            <TableRow className="border-border bg-muted/30 hover:bg-muted/30">
+                                              <TableCell colSpan={11} className="px-3 py-2.5">
+                                                <div className="space-y-2">
+                                                  <div className="flex items-center justify-between gap-3">
+                                                    <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                                                      Thresholds — {device.deviceSerialNo}
+                                                    </p>
+                                                    <div className="flex items-center gap-2">
+                                                      {thresholdSavedId === device.id && (
+                                                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-[color:var(--clr-online)]">
+                                                          <Check className="h-3 w-3" />
+                                                          Saved
+                                                        </span>
+                                                      )}
+                                                      <Button
+                                                        type="button"
+                                                        size="sm"
+                                                        disabled={savingThresholds}
+                                                        onClick={() => saveRowThresholds(device.id)}
+                                                        className="h-7 px-3 text-xs bg-[color:var(--clr-accent-hi)] text-[color:var(--accent-foreground)] hover:bg-[color:var(--clr-accent-hi)]"
+                                                      >
+                                                        {savingThresholds ? "Saving…" : "Save Thresholds"}
+                                                      </Button>
+                                                    </div>
+                                                  </div>
+                                                  <ThresholdCardSet
+                                                    values={rowThresholds}
+                                                    onChange={(field, value) => {
+                                                      setRowThresholds((prev) => ({ ...prev, [field]: value }));
+                                                      setThresholdError("");
+                                                      setThresholdSavedId(null);
+                                                    }}
+                                                    error={thresholdError || null}
+                                                  />
+                                                </div>
+                                              </TableCell>
+                                            </TableRow>
+                                          )}
+                                        </Fragment>
+                                      );
+                                    })}
+                                  </TableBody>
+                                </Table>
+                              </div>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </Fragment>
+                  );
+                })}
+                {customers.length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={7} className="text-center py-8 text-muted-foreground text-sm">
+                      No registered endpoints found.
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        </Card>
+      )}
+
+      {editingCustomer && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+          <Card className="w-full max-w-2xl max-h-[90vh] overflow-y-auto bg-background shadow-2xl">
+            <CardHeader>
+              <CardTitle>Edit Customer Information</CardTitle>
+              <p className="text-xs text-muted-foreground">Customer details are shared; category is configured separately for each meter.</p>
+            </CardHeader>
+            <CardContent>
+              <form onSubmit={saveCustomerEdit} className="space-y-4">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Customer Name</label>
+                  <Input value={editCustomerName} onChange={(event) => setEditCustomerName(event.target.value)} required />
+                </div>
+                <div className="space-y-1.5">
+                    <label className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Geographical Area</label>
+                    <select value={editGaId} onChange={(event) => setEditGaId(event.target.value)} required className="flex h-9 w-full rounded-md border border-border bg-muted px-3 text-sm text-foreground">
+                      <option value="" disabled>Select a city</option>
+                      {gasList.map((area) => <option key={area.id} value={area.id}>{area.name}</option>)}
+                    </select>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Address</label>
+                  <Input value={editAddress} onChange={(event) => setEditAddress(event.target.value)} />
+                </div>
+
+                <div className="border-t border-border pt-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Meters</p>
+                    {loadingEditDevices && (
+                      <span className="text-[11px] text-muted-foreground">Loading meters…</span>
+                    )}
+                  </div>
+                  {editDeviceDrafts.length === 0 && !loadingEditDevices && (
+                    <p className="text-sm text-muted-foreground">No meters assigned to this customer.</p>
+                  )}
+                  <div className="space-y-2">
+                    {editDeviceDrafts.map((draft) => {
+                      const isOpen = expandedEditDeviceId === draft.id;
+                      return (
+                        <div key={draft.id} className="rounded-lg border border-border bg-muted/30">
+                          <div className="flex items-center justify-between gap-3 px-3 py-2.5">
+                            <div className="min-w-0">
+                              <p className="font-mono text-sm text-muted-foreground truncate">{draft.deviceSerialNo}</p>
+                              <p className="text-[11px] text-muted-foreground italic">Cannot be changed</p>
+                              <p className="text-[11px] text-muted-foreground mt-0.5">
+                                Meter serial: <span className="font-mono not-italic">{draft.meterSerialNo || "—"}</span>
+                              </p>
+                            </div>
+                            <div className="flex shrink-0 items-center gap-1">
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                className="text-destructive hover:text-destructive"
+                                disabled={savingEdit || detachingMeter}
+                                onClick={() => {
+                                  setDetachError("");
+                                  setPendingDetach(draft);
+                                }}
+                              >
+                                <Unlink className="mr-1 h-3.5 w-3.5" />
+                                Detach
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() =>
+                                  setExpandedEditDeviceId(isOpen ? null : draft.id)
+                                }
+                              >
+                                {isOpen ? "Done" : "Edit"}
+                              </Button>
+                            </div>
+                          </div>
+                          {isOpen && (
+                            <div className="space-y-3 border-t border-border px-3 py-3">
+                              <div className="space-y-1.5">
+                                <label className="text-xs text-muted-foreground">Meter Category</label>
+                                <select value={draft.category} onChange={(e) => updateEditDeviceDraft(draft.id, "category", e.target.value)} className="flex h-9 w-full rounded-md border border-border bg-muted px-3 text-sm text-foreground">
+                                  <option value="">Uncategorized</option>
+                                  <option value="COMMERCIAL">Commercial</option>
+                                  <option value="RESIDENTIAL">Residential</option>
+                                  <option value="DRS">DRS</option>
+                                  <option value="INDUSTRIAL_CNG">Industrial CNG</option>
+                                  <option value="INDUSTRIAL_PNG">Industrial PNG</option>
+                                </select>
+                              </div>
+                              <div className="space-y-1.5">
+                                <label className="text-xs text-muted-foreground">Device Serial No</label>
+                                <Input
+                                  value={draft.deviceSerialNo}
+                                  readOnly
+                                  disabled
+                                  className="bg-muted border-border text-muted-foreground cursor-not-allowed font-mono text-sm"
+                                />
+                                <p className="text-[11px] text-muted-foreground">Cannot be changed — ingest identity key.</p>
+                              </div>
+                              <div className="space-y-1.5">
+                                <label className="text-xs text-muted-foreground">Meter Serial No</label>
+                                <Input
+                                  value={draft.meterSerialNo}
+                                  onChange={(e) => updateEditDeviceDraft(draft.id, "meterSerialNo", e.target.value)}
+                                  className="font-mono text-sm"
+                                />
+                              </div>
+                              <div className="grid grid-cols-2 gap-3">
+                                <div className="space-y-1.5">
+                                  <label className="text-xs text-muted-foreground">Latitude</label>
+                                  <Input
+                                    type="number"
+                                    step="0.000001"
+                                    value={draft.latitude}
+                                    onChange={(e) => updateEditDeviceDraft(draft.id, "latitude", e.target.value)}
+                                    className="font-mono text-sm"
+                                  />
+                                </div>
+                                <div className="space-y-1.5">
+                                  <label className="text-xs text-muted-foreground">Longitude</label>
+                                  <Input
+                                    type="number"
+                                    step="0.000001"
+                                    value={draft.longitude}
+                                    onChange={(e) => updateEditDeviceDraft(draft.id, "longitude", e.target.value)}
+                                    className="font-mono text-sm"
+                                  />
+                                </div>
+                              </div>
+                              <div className="grid grid-cols-2 gap-3">
+                                <div className="space-y-1.5">
+                                  <label className="text-xs text-muted-foreground">Meter Size</label>
+                                  <Input
+                                    value={draft.meterSize}
+                                    onChange={(e) => updateEditDeviceDraft(draft.id, "meterSize", e.target.value)}
+                                  />
+                                </div>
+                                <div className="space-y-1.5">
+                                  <label className="text-xs text-muted-foreground">Meter Model</label>
+                                  <Input
+                                    value={draft.deviceModel}
+                                    onChange={(e) => updateEditDeviceDraft(draft.id, "deviceModel", e.target.value)}
+                                  />
+                                </div>
+                              </div>
+                              <div className="grid grid-cols-2 gap-3">
+                                <div className="space-y-1.5">
+                                  <label className="text-xs text-muted-foreground">Firmware Version</label>
+                                  <Input
+                                    value={draft.firmwareVersion}
+                                    onChange={(e) => updateEditDeviceDraft(draft.id, "firmwareVersion", e.target.value)}
+                                  />
+                                </div>
+                                <div className="space-y-1.5">
+                                  <label className="text-xs text-muted-foreground">Hardware Version</label>
+                                  <Input
+                                    value={draft.hardwareVersion}
+                                    onChange={(e) => updateEditDeviceDraft(draft.id, "hardwareVersion", e.target.value)}
+                                  />
+                                </div>
+                              </div>
+                              <div className="space-y-1.5">
+                                <label className="text-xs text-muted-foreground">Configuration Version</label>
+                                <Input
+                                  value={draft.configurationVersion}
+                                  onChange={(e) => updateEditDeviceDraft(draft.id, "configurationVersion", e.target.value)}
+                                />
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {editError && <p className="text-sm" style={{ color: "var(--clr-alert)" }}>{editError}</p>}
+                <div className="flex justify-end gap-3 pt-2">
+                  <Button type="button" variant="outline" onClick={() => setEditingCustomer(null)}>Cancel</Button>
+                  <Button type="submit" disabled={savingEdit}>{savingEdit ? "Saving…" : "Save Changes"}</Button>
+                </div>
+              </form>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {pendingDetach && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-xl border border-border bg-background p-6 shadow-2xl">
+            <h3 className="mb-2 text-lg font-bold text-foreground">Detach meter?</h3>
+            <p className="mb-4 text-sm text-muted-foreground">
+              Detach meter <span className="font-mono text-foreground">{pendingDetach.deviceSerialNo}</span> from this customer?
+              The meter and its readings will remain in the database.
+            </p>
+            {detachError && (
+              <p className="mb-4 text-sm" style={{ color: "var(--clr-alert)" }}>
+                {detachError}
+              </p>
+            )}
+            <div className="flex justify-end gap-3">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={detachingMeter}
+                onClick={() => {
+                  setPendingDetach(null);
+                  setDetachError("");
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                variant="destructive"
+                disabled={detachingMeter}
+                onClick={detachMeterFromCustomer}
+              >
+                {detachingMeter ? "Detaching…" : "Detach meter"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div className="flex justify-center space-x-2 mt-6">
+          <Button
+            variant="outline"
+            disabled={page === 1}
+            onClick={() => setPage(p => Math.max(1, p - 1))}
+            className="border-border bg-secondary"
+          >
+            Previous
+          </Button>
+          <span className="flex items-center px-4 text-sm text-muted-foreground">
+            Page {page} of {totalPages}
+          </span>
+          <Button
+            variant="outline"
+            disabled={page === totalPages}
+            onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+            className="border-border bg-secondary"
+          >
+            Next
+          </Button>
+        </div>
+      )}
+
+      {/* Add New Customer Modal */}
+      {addCustomerModalOpen && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+          <Card className="w-full max-w-md bg-background border border-border shadow-2xl animate-in zoom-in-95">
+            <CardHeader className="flex flex-row items-center justify-between border-b border-border pb-4">
+              <div>
+                <CardTitle className="text-lg font-bold text-foreground flex items-center gap-2">
+                  <PlusCircle className="w-5 h-5 text-[color:var(--clr-accent-hi)]" />
+                  Add New Customer
+                </CardTitle>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Create a customer profile to manage meters, locations, and stations.
+                </p>
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                onClick={() => setAddCustomerModalOpen(false)}
+                className="h-8 w-8 text-muted-foreground hover:text-foreground"
+              >
+                <X className="w-4 h-4" />
+              </Button>
+            </CardHeader>
+            <CardContent className="pt-4">
+              <form onSubmit={handleAddCustomerSubmit} className="space-y-4">
+                {newCustError && (
+                  <div className="p-3 rounded-lg bg-[color:var(--clr-alert)]/10 border border-[color:var(--clr-alert)]/20 text-[color:var(--clr-alert)] text-xs font-semibold">
+                    {newCustError}
+                  </div>
+                )}
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                    Customer Name <span className="text-[color:var(--clr-alert)]">*</span>
+                  </label>
+                  <Input
+                    placeholder="e.g. Acme Industrial Ltd"
+                    value={newCustName}
+                    onChange={(e) => setNewCustName(e.target.value)}
+                    required
+                    className="bg-muted border-border text-foreground text-sm"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                    <label className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                      Geographical Area (City) <span className="text-[color:var(--clr-alert)]">*</span>
+                    </label>
+                    <select
+                      className="flex h-9 w-full rounded-md border border-border bg-muted px-3 text-sm text-foreground focus:outline-none focus:border-[color:var(--clr-accent-hi)]"
+                      value={newCustGaId}
+                      onChange={(e) => setNewCustGaId(e.target.value)}
+                      required
+                    >
+                      <option value="" disabled>Select a city…</option>
+                      {gasList.map((ga) => (
+                        <option key={ga.id} value={ga.id}>{ga.name}</option>
+                      ))}
+                    </select>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                    Address
+                  </label>
+                  <Input
+                    placeholder="Enter full address..."
+                    value={newCustAddress}
+                    onChange={(e) => setNewCustAddress(e.target.value)}
+                    className="bg-muted border-border text-foreground text-sm"
+                  />
+                </div>
+
+                <div className="flex justify-end gap-3 pt-3 border-t border-border">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setAddCustomerModalOpen(false)}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    type="submit"
+                    disabled={savingNewCust}
+                    className="bg-[color:var(--clr-accent-hi)] hover:bg-[color:var(--clr-accent-hi)] text-[color:var(--accent-foreground)] font-semibold"
+                  >
+                    {savingNewCust ? "Saving…" : "Create Customer"}
+                  </Button>
+                </div>
+              </form>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* Slide-out Sidebar Drawer Form (Add Meter / Provisioning) */}
+      {drawerOpen && (
+        <div className="fixed inset-0 z-50 flex justify-end bg-black/60 backdrop-blur-sm transition-all duration-300">
+          {/* Backdrop click to close */}
+          <div className="absolute inset-0" onClick={() => setDrawerOpen(false)} />
+
+          <div className="relative w-full max-w-lg h-full bg-background border-l border-border p-6 shadow-2xl flex flex-col justify-between overflow-y-auto transform transition-all duration-300 animate-in slide-in-from-right">
+            <div>
+              {/* Drawer Header */}
+              <div className="flex justify-between items-center border-b border-border pb-4 mb-6">
+                <div>
+                  <h2 className="text-lg font-bold text-foreground flex items-center gap-2">
+                    <PlusCircle className="w-5 h-5 text-[color:var(--clr-accent-hi)]" />
+                    {provisionType === "existing" ? `Add Meter to ${customerName || "Customer"}` : "Provision Endpoint"}
+                  </h2>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Assign a gas meter hardware endpoint and set operational limits.
+                  </p>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setDrawerOpen(false)}
+                  className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                >
+                  <X className="w-4 h-4" />
+                </Button>
+              </div>
+
+              {/* Form Error Alert */}
+              {formError && (
+                <div className="p-3 mb-4 rounded-lg bg-[color:var(--clr-alert)]/10 border border-[color:var(--clr-alert)]/20 text-[color:var(--clr-alert)] text-xs font-semibold">
+                  {formError}
+                </div>
+              )}
+
+              {/* Drawer Form */}
+              <form id="provision-form" onSubmit={handleProvisionSubmit} className="space-y-4">
+                {/* Available Unassigned Meter Selector (If Existing Customer) */}
+                {provisionType === "existing" && (
+                  <div className="space-y-1.5 rounded-lg border border-border bg-muted/30 p-3">
+                    <label className="text-xs font-bold text-muted-foreground uppercase tracking-wider block">Select Meter Hardware</label>
+                    {fetchingUnassigned ? (
+                      <p className="text-xs text-muted-foreground">Loading available unassigned meters…</p>
+                    ) : unassignedDevices.length > 0 ? (
+                      <select
+                        className="w-full flex h-9 rounded-md border border-border bg-background px-3 py-1 text-sm shadow-sm transition-colors text-foreground focus:outline-none focus:border-[color:var(--clr-accent-hi)]"
+                        value={selectedDevice?.id || ""}
+                        onChange={(e) => {
+                          const dev = unassignedDevices.find((d) => d.id === e.target.value);
+                          if (dev) {
+                            setSelectedDevice(dev);
+                            setMeterIdInput(dev.deviceSerialNo);
+                            if (dev.latitude) setLatitudeInput(String(dev.latitude));
+                            if (dev.longitude) setLongitudeInput(String(dev.longitude));
+                            setThresholdValues(thresholdFormFromDevice(dev));
+                          }
+                        }}
+                      >
+                        <option value="">-- Choose from available meters ({unassignedDevices.length}) --</option>
+                        {unassignedDevices.map((d) => (
+                          <option key={d.id} value={d.id}>
+                            {d.deviceSerialNo} {d.meterSerialNo ? `(${d.meterSerialNo})` : ""} — {d.status}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <p className="text-xs text-muted-foreground italic">
+                        {selectedDevice ? `Using meter ${selectedDevice.deviceSerialNo}` : "No unassigned meters detected on network. Enter Device ID below:"}
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {/* Meter ID (Prefilled or Selected) */}
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Meter ID / Serial</label>
+                  <Input
+                    value={meterIdInput || selectedDevice?.deviceSerialNo || ""}
+                    onChange={(e) => setMeterIdInput(e.target.value)}
+                    placeholder="e.g. DM-1803 or EVC-000123"
+                    className="bg-muted border-border text-foreground font-mono text-sm"
+                  />
+                </div>
+
+                {/* Device ID (Editable - maps to meterSerialNo) */}
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Meter Serial No (Optional)</label>
+                  <Input
+                    placeholder="Enter Meter Serial No or leave blank..."
+                    value={deviceIdInput}
+                    onChange={(e) => setDeviceIdInput(e.target.value)}
+                    className="bg-muted border-border text-foreground placeholder:text-muted-foreground focus:border-[color:var(--clr-accent-hi)] focus:ring-0 font-mono text-sm"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Latitude</label>
+                    <Input type="number" step="0.000001" placeholder="e.g. 18.5204" value={latitudeInput} onChange={(event) => setLatitudeInput(event.target.value)} required className="bg-muted border-border text-foreground placeholder:text-muted-foreground focus:border-[color:var(--clr-accent-hi)] focus:ring-0 font-mono text-sm" />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Longitude</label>
+                    <Input type="number" step="0.000001" placeholder="e.g. 73.8567" value={longitudeInput} onChange={(event) => setLongitudeInput(event.target.value)} required className="bg-muted border-border text-foreground placeholder:text-muted-foreground focus:border-[color:var(--clr-accent-hi)] focus:ring-0 font-mono text-sm" />
+                  </div>
+                </div>
+                <p className="-mt-2 text-[11px] text-muted-foreground">Required so this meter appears on the Map page.</p>
+
+                {/* Provision Type Toggle (Only if not directly triggered from Add Meter on a specific customer) */}
+                {!selectedExistingCustomerId && (
+                  <div className="flex gap-2 p-1 bg-muted rounded-lg border border-border">
+                    <Button
+                      type="button"
+                      variant={provisionType === "new" ? "default" : "ghost"}
+                      className={`flex-1 h-8 text-xs ${provisionType === "new" ? "bg-[color:var(--clr-accent-hi)] text-[color:var(--accent-foreground)] hover:bg-[color:var(--clr-accent-hi)]" : "text-muted-foreground hover:text-foreground"}`}
+                      onClick={() => setProvisionType("new")}
+                    >
+                      New Customer
+                    </Button>
+                    <Button
+                      type="button"
+                      variant={provisionType === "existing" ? "default" : "ghost"}
+                      className={`flex-1 h-8 text-xs ${provisionType === "existing" ? "bg-[color:var(--clr-accent-hi)] text-[color:var(--accent-foreground)] hover:bg-[color:var(--clr-accent-hi)]" : "text-muted-foreground hover:text-foreground"}`}
+                      onClick={() => setProvisionType("existing")}
+                    >
+                      Existing Customer
+                    </Button>
+                  </div>
+                )}
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Meter Category</label>
+                  <select className="w-full flex h-9 rounded-md border border-border bg-muted px-3 py-1 text-sm text-foreground" value={selectedCategory} onChange={(e) => setSelectedCategory(e.target.value)}>
+                    <option value="">Uncategorized</option>
+                    <option value="RESIDENTIAL">Residential</option>
+                    <option value="COMMERCIAL">Commercial</option>
+                    <option value="DRS">DRS</option>
+                    <option value="INDUSTRIAL_CNG">Industrial CNG</option>
+                    <option value="INDUSTRIAL_PNG">Industrial PNG</option>
+                  </select>
+                </div>
+
+                {provisionType === "existing" ? (
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Target Customer</label>
+                    <select
+                      className="w-full flex h-9 rounded-md border border-border bg-muted px-3 py-1 text-sm shadow-sm transition-colors text-foreground focus:outline-none focus:border-[color:var(--clr-accent-hi)]"
+                      value={selectedExistingCustomerId}
+                      onChange={(e) => {
+                        setSelectedExistingCustomerId(e.target.value);
+                        const found = existingCustomers.find(c => c.id === e.target.value);
+                        if (found) setCustomerName(found.name);
+                      }}
+                      required
+                    >
+                      <option value="" disabled>Select a customer…</option>
+                      {loadingRefs ? (
+                        <option value="" disabled>Loading customers…</option>
+                      ) : existingCustomers.length === 0 ? (
+                        <option value="" disabled>No customers found</option>
+                      ) : (
+                        existingCustomers.map((c) => (
+                          <option key={c.id} value={c.id}>{c.name}</option>
+                        ))
+                      )}
+                    </select>
+                  </div>
+                ) : (
+                  <>
+                    {/* Customer Name */}
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Customer Name</label>
+                      <Input
+                        placeholder="Enter customer name..."
+                        value={customerName}
+                        onChange={(e) => setCustomerName(e.target.value)}
+                        required={provisionType === "new"}
+                        className="bg-muted border-border text-foreground placeholder:text-muted-foreground focus:border-[color:var(--clr-accent-hi)] focus:ring-0 text-sm"
+                      />
+                    </div>
+
+                    {/* Geographical Area Dropdown */}
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Geographical Area (City)</label>
+                      <select
+                        className="w-full flex h-9 rounded-md border border-border bg-muted px-3 py-1 text-sm shadow-sm transition-colors text-foreground focus:outline-none focus:border-[color:var(--clr-accent-hi)]"
+                        value={selectedGaId}
+                        onChange={(e) => setSelectedGaId(e.target.value)}
+                        required={provisionType === "new"}
+                      >
+                        <option value="" disabled>Select a city…</option>
+                        {loadingRefs ? (
+                          <option value="" disabled>Loading cities…</option>
+                        ) : gasList.length === 0 ? (
+                          <option value="" disabled>No cities available</option>
+                        ) : (
+                          gasList.map((ga) => (
+                            <option key={ga.id} value={ga.id}>{ga.name}</option>
+                          ))
+                        )}
+                      </select>
+                    </div>
+
+                    {/* Address */}
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Address</label>
+                      <Input
+                        placeholder="Enter address..."
+                        value={address}
+                        onChange={(e) => setAddress(e.target.value)}
+                        className="bg-muted border-border text-foreground placeholder:text-muted-foreground focus:border-[color:var(--clr-accent-hi)] focus:ring-0 text-sm"
+                      />
+                    </div>
+                  </>
+                )}
+
+                {/* Redesigned 2x2 Grid Operational Alarm Thresholds */}
+                <ThresholdCardSet
+                  values={thresholdValues}
+                  onChange={(field, value) =>
+                    setThresholdValues((prev) => ({ ...prev, [field]: value }))
+                  }
+                />
+              </form>
+            </div>
+
+            {/* Drawer Footer Actions */}
+            <div className="border-t border-border pt-4 mt-6 flex gap-3">
+              <Button
+                variant="outline"
+                onClick={() => setDrawerOpen(false)}
+                className="flex-1 border-border bg-transparent text-muted-foreground hover:bg-muted hover:text-foreground"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                form="provision-form"
+                disabled={submitting}
+                className="flex-1 bg-[color:var(--clr-accent-hi)] hover:bg-[color:var(--clr-accent-hi)] text-[color:var(--accent-foreground)]"
+              >
+                {submitting ? "Saving..." : "Submit"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirmation Dialog */}
+      {showConfirmDialog && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-background border border-border rounded-xl p-6 max-w-sm w-full mx-4 shadow-2xl animate-in zoom-in-95">
+            <h3 className="text-lg font-bold text-foreground mb-2">Confirm Provisioning</h3>
+            <p className="text-sm text-muted-foreground mb-6">
+              Are you sure you want to assign meter <span className="font-mono text-foreground">{selectedDevice?.deviceSerialNo}</span> to
+              {provisionType === "new" ? " a new customer" : " the selected customer"}?
+            </p>
+            <div className="flex gap-3">
+              <Button
+                variant="outline"
+                onClick={() => setShowConfirmDialog(false)}
+                className="flex-1 border-border bg-transparent text-muted-foreground hover:bg-muted hover:text-foreground"
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={confirmProvisioning}
+                className="flex-1 bg-[color:var(--clr-accent-hi)] hover:bg-[color:var(--clr-accent-hi)] text-[color:var(--accent-foreground)]"
+              >
+                Confirm
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
