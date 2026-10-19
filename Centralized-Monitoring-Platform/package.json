@@ -12,7 +12,8 @@
     "amr:db:init": "tsx scripts/amr-db-init.ts",
     "amr:test": "tsx scripts/amr-test.ts",
     "user:create": "tsx scripts/create-user.ts",
-    "db:refresh": "tsx scripts/refresh-views.ts"
+    "db:refresh": "tsx scripts/refresh-views.ts",
+    "amr:ingest:test": "tsx scripts/test-amr-ingest.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",
