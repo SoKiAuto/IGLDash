@@ -10,6 +10,7 @@ import {
   type LucideIcon,
   Flame,
   Users,
+  Settings,
 } from "lucide-react"
 
 export type NavigationLink = {
@@ -58,6 +59,7 @@ export const MONITORING_ITEMS: NavigationEntry[] = [
 export const AMR_ITEMS: NavigationEntry[] = [
   { title: "Customers", href: "/amr/customers", icon: Users },
   { title: "Meters", href: "/amr/meters", icon: Flame },
+  { title: "Settings", href: "/settings", icon: Settings },
 ]
 
 export type NavigationSection = {

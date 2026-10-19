@@ -1,6 +1,7 @@
 "use client"
 
-import { ChevronsUpDown, LogOut } from "lucide-react"
+import { ChevronsUpDown, LogOut, Settings } from "lucide-react"
+import Link from "next/link"
 import { useRouter } from "next/navigation"
 
 import {
@@ -91,8 +92,12 @@ export function UserMenu({ userName, userEmail }: UserMenuProps) {
               </div>
             </div>
             <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={handleSignOut}>
-              <LogOut />
+            <DropdownMenuItem render={<Link href="/settings" className="flex items-center gap-2 cursor-pointer" />}>
+              <Settings className="size-4" />
+              Settings
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={handleSignOut} className="cursor-pointer">
+              <LogOut className="size-4" />
               Sign out
             </DropdownMenuItem>
           </DropdownMenuContent>

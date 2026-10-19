@@ -15,7 +15,10 @@ export function AppHeader() {
     isActiveNavigationItem(pathname, item)
   )?.title
 
-  const isMetersPage = pathname.startsWith("/amr/meters") || pathname.startsWith("/amr")
+  const isMetersPage =
+    pathname.startsWith("/amr/meters") ||
+    pathname.startsWith("/amr") ||
+    pathname.startsWith("/settings")
 
   return (
     <header className="flex h-14 shrink-0 items-center gap-2 bg-background px-4 border-b">

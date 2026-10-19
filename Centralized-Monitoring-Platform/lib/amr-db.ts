@@ -348,9 +348,73 @@ export async function fetchAmrCustomersGrouped(params: {
   return { items: paginated, pagination: { page, limit, totalCount, totalPages } }
 }
 
-export async function fetchGasList(): Promise<Array<{ id: string; name: string }>> {
-  const res = await amrPool.query('SELECT id, name FROM "GeographicalArea" ORDER BY name ASC')
+export interface GeographicalAreaItem {
+  id: string
+  name: string
+  code: string | null
+  parentId?: string | null
+  createdAt?: string
+  customerCount?: number
+}
+
+export async function fetchGasList(): Promise<GeographicalAreaItem[]> {
+  const res = await amrPool.query(`
+    SELECT ga.id, ga.name, ga.code, ga."parentId", ga."createdAt",
+           COUNT(DISTINCT c.id)::int as "customerCount"
+    FROM "GeographicalArea" ga
+    LEFT JOIN "Customer" c ON c."gaId" = ga.id
+    GROUP BY ga.id, ga.name, ga.code, ga."parentId", ga."createdAt"
+    ORDER BY ga.name ASC
+  `)
   return res.rows
+}
+
+export async function createGeographicalArea(data: {
+  name: string
+  code?: string | null
+  parentId?: string | null
+}): Promise<GeographicalAreaItem> {
+  const id = crypto.randomUUID()
+  const res = await amrPool.query(
+    `INSERT INTO "GeographicalArea" (id, name, code, "parentId")
+     VALUES ($1, $2, $3, $4)
+     RETURNING id, name, code, "parentId", "createdAt"`,
+    [id, data.name.trim(), data.code?.trim() || null, data.parentId || null]
+  )
+  return res.rows[0]
+}
+
+export async function updateGeographicalArea(
+  id: string,
+  data: { name: string; code?: string | null }
+): Promise<GeographicalAreaItem | null> {
+  const res = await amrPool.query(
+    `UPDATE "GeographicalArea"
+     SET name = $1, code = $2
+     WHERE id = $3
+     RETURNING id, name, code, "parentId", "createdAt"`,
+    [data.name.trim(), data.code?.trim() || null, id]
+  )
+  return res.rows[0] ?? null
+}
+
+export async function deleteGeographicalArea(
+  id: string
+): Promise<{ success: boolean; error?: string }> {
+  const check = await amrPool.query(
+    'SELECT COUNT(*)::int as count FROM "Customer" WHERE "gaId" = $1',
+    [id]
+  )
+  const count = check.rows[0]?.count ?? 0
+  if (count > 0) {
+    return {
+      success: false,
+      error: `Cannot delete: ${count} customer${count === 1 ? "" : "s"} currently assigned to this geographical area.`,
+    }
+  }
+
+  await amrPool.query('DELETE FROM "GeographicalArea" WHERE id = $1', [id])
+  return { success: true }
 }
 
 export async function updateDeviceThresholds(
