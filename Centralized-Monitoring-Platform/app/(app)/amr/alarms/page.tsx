@@ -1,7 +1,7 @@
 ﻿"use client"
 
 import { useCallback, useEffect, useState } from "react"
-import { AlertTriangle, Bell, CheckCircle2, Clock, RefreshCw, Search, XCircle } from "lucide-react"
+import { AlertTriangle, Bell, CheckCircle2, Clock, Search, XCircle } from "lucide-react"
 
 import { DashboardPanel } from "@/components/dashboard-panel"
 import { Button } from "@/components/ui/button"
@@ -113,9 +113,6 @@ export default function AlarmsPage() {
           <h1 className="text-2xl font-semibold tracking-tight">AMR Alarms</h1>
           <p className="text-sm text-muted-foreground">System alerts from gas meters · {pagination.totalCount} total</p>
         </div>
-        <Button variant="outline" size="sm" onClick={() => fetchAlarms(pagination.page)}>
-          <RefreshCw className="size-3.5" />Refresh
-        </Button>
       </div>
 
       <DashboardPanel title="Filters">

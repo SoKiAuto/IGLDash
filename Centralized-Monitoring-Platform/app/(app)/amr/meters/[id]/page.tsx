@@ -14,7 +14,6 @@ import {
   ChevronLeft,
   ChevronDown,
   ChevronUp,
-  RefreshCw,
   Clock,
   Loader2,
   Thermometer,
@@ -28,7 +27,6 @@ import { ExportContextSetter } from "@/components/export-context-setter";
 import { ChartExportData } from "@/components/export/chart-export-provider";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useAutoRefresh } from "@/lib/auto-refresh";
 import { formatLocalTs, cn } from "@/lib/utils";
 import { CHART_COLORS } from "@/lib/chart-colors";
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart";
@@ -267,10 +265,6 @@ export default function MeterDetailPage() {
     loadConsumption();
   }, [loadConsumption]);
 
-  useAutoRefresh(loadData);
-  useAutoRefresh(loadHistory);
-  useAutoRefresh(loadConsumption);
-
   const hourlyPoints = hourly?.hourlyConsumption ?? [];
   // Timestamped points describe a gas day that crosses midnight; the rest belong to the reading's own day.
   const hourlyCrossesMidnight = hourlyPoints.some((point) => point.timestamp != null);
@@ -447,14 +441,9 @@ export default function MeterDetailPage() {
             {r ? ` · Last reading: ${formatLocalTs(r.readingDate)}` : " · No reading yet"}
           </p>
           <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
-            Latest readings, alarm limits and consumption history for this meter. Readings refresh
-            automatically while the page is open.
+            Latest readings, alarm limits and consumption history for this meter.
           </p>
         </div>
-        <Button variant="outline" size="sm" onClick={() => loadData(true)}>
-          <RefreshCw className="size-3.5" />
-          Refresh
-        </Button>
       </div>
 
       {/* ── Volume / Pressure / Temperature ────────────────────────────── */}

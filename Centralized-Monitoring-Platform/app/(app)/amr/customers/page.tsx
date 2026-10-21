@@ -9,7 +9,6 @@ import {
   Loader2,
   Pencil,
   PlusCircle,
-  RefreshCw,
   Search,
   Unlink,
   WifiOff,
@@ -39,7 +38,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { useAutoRefresh } from "@/lib/auto-refresh"
 import { parseAndValidateThresholdInputs } from "@/lib/device-field-parse"
 import {
   ThresholdCardSet,
@@ -425,8 +423,6 @@ export default function CustomersPage() {
   useEffect(() => {
     fetchCustomers(1)
   }, [fetchCustomers])
-
-  useAutoRefresh(() => fetchCustomers(pagination.page))
 
   const getCustomerStatusSummary = (customer: CustomerGroup) => {
     if (!customer.devices || customer.devices.length === 0) return "NEW"
@@ -857,10 +853,6 @@ export default function CustomersPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => fetchCustomers(pagination.page)}>
-            <RefreshCw className={`size-3.5 ${loading ? "animate-spin" : ""}`} />
-            Refresh
-          </Button>
           <Button size="sm" onClick={openAddCustomerModal}>
             <PlusCircle className="size-3.5" />
             Add Customer

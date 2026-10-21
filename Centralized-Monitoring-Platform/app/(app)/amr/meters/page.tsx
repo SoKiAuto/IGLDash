@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { Flame, Loader2, RefreshCw, Search, WifiOff } from "lucide-react"
+import { Flame, Loader2, Search, WifiOff } from "lucide-react"
 
 import { DashboardPanel } from "@/components/dashboard-panel"
 import { StatusBadge } from "@/components/overview/status-badge"
@@ -151,9 +151,6 @@ export default function MetersPage() {
             reading time. Select a row to open its readings, consumption history and alarm limits.
           </p>
         </div>
-        <Button variant="outline" size="sm" onClick={() => fetchDevices(pagination.page)}>
-          <RefreshCw className={`size-3.5 ${loading ? "animate-spin" : ""}`} />Refresh
-        </Button>
       </div>
 
       <DashboardPanel
