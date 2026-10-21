@@ -84,6 +84,22 @@ export type PaginationMeta = {
   totalPages: number
 }
 
+export async function createAmrCustomer(data: {
+  name: string
+  gaId: string
+  address?: string | null
+}): Promise<{ id: string; name: string; gaId: string; address: string | null }> {
+  const id = crypto.randomUUID()
+  const result = await amrPool.query(
+    `INSERT INTO "Customer" (id, name, address, "gaId")
+     VALUES ($1, $2, $3, $4)
+     RETURNING id, name, address, "gaId"`,
+    [id, data.name.trim(), data.address?.trim() || null, data.gaId]
+  )
+
+  return result.rows[0]
+}
+
 export type AmrOverviewData = {
   totalDevices: number
   reportedToday: number
