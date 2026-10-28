@@ -8,7 +8,7 @@ export default async function LoginPage() {
   // Real session check here (not in proxy.ts) so a stale cookie cannot cause a redirect loop.
   const session = await getSession()
   if (session) {
-    redirect("/dashboard")
+    redirect("/exceptions")
   }
 
   return (

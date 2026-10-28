@@ -439,7 +439,11 @@ export default function CustomersPage() {
 
     if (!custId) return
 
-    setEditingCustomer(seedDevice || ({ id: "temp", customerId: custId } as DeviceItem))
+    setEditingCustomer(
+      seedDevice
+        ? { ...seedDevice, customerId: custId }
+        : ({ id: "temp", customerId: custId } as DeviceItem)
+    )
     setEditCustomerName(custName)
     setEditAddress(address)
     setEditGaId(gaId)
@@ -615,7 +619,11 @@ export default function CustomersPage() {
   const saveCustomerEdit = async (event: React.FormEvent) => {
     event.preventDefault()
     const targetCustId = editingCustomer?.customerId
-    if (!targetCustId || !editCustomerName.trim() || !editGaId) {
+    if (!targetCustId) {
+      setEditError("Customer record could not be identified. Close the editor and try again.")
+      return
+    }
+    if (!editCustomerName.trim() || !editGaId) {
       setEditError("Customer name and geographical area are required.")
       return
     }

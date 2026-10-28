@@ -8,6 +8,7 @@ import { ChartExportProvider } from "@/components/export/chart-export-provider"
 type DashboardPanelProps = {
   title: string
   description?: string
+  icon?: ReactNode
   // Optional link to the detail page, shown at the top right.
   href?: string
   linkLabel?: string
@@ -23,6 +24,7 @@ type DashboardPanelProps = {
 export function DashboardPanel({
   title,
   description,
+  icon,
   href,
   linkLabel = "View all",
   action,
@@ -35,11 +37,14 @@ export function DashboardPanel({
     <ChartExportProvider>
       <section className={`h-full rounded-xl bg-muted/50 p-5 ${alignToEnd ? "flex flex-col" : ""}`}>
         <div className="mb-4 flex items-start justify-between gap-3">
-          <div>
-            <h2 className="text-base font-medium">{title}</h2>
-            {description && (
-              <p className="text-sm text-muted-foreground">{description}</p>
-            )}
+          <div className="flex items-start gap-3">
+            {icon}
+            <div>
+              <h2 className="text-base font-medium">{title}</h2>
+              {description && (
+                <p className="text-sm text-muted-foreground">{description}</p>
+              )}
+            </div>
           </div>
           <div className="flex shrink-0 items-center gap-3">
             {action}

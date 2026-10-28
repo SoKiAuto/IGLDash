@@ -1,6 +1,7 @@
 import { Prisma } from "@/app/generated/prisma/client"
 import type { DateRange } from "@/lib/date-range"
 import { prisma } from "@/lib/prisma"
+import { ALL_STATIONS, type StationFilter } from "@/lib/stations"
 
 // Read-only: these only run SELECT queries on the raw compressor readings tables.
 // Callers must check the session first (requireSession).
@@ -149,5 +150,85 @@ export async function getCompressorDailyRuns(range: DateRange): Promise<Compress
       AND moved.day <= ${range.to}::date
       AND moved.counter_hours * scale.factor <= ${MAX_HOURS_PER_DAY}
     ORDER BY moved.station, moved.unit, moved.day
+  `)
+}
+
+export type HourlyCompressorStatusRow = {
+  station: string
+  hourStart: string
+  hasSignal: boolean
+  isUp: boolean | null
+}
+
+// A recent counter increase is positive evidence of compressor operation.
+// Long gaps and counter resets stay unknown rather than being treated as down.
+export async function getHourlyCompressorStatus(
+  range: DateRange,
+  station: StationFilter = ALL_STATIONS
+): Promise<HourlyCompressorStatusRow[]> {
+  const stationCondition =
+    station === ALL_STATIONS
+      ? Prisma.empty
+      : Prisma.sql`AND station_name = ${station}`
+  const sources = SOURCES.map(
+    (source) => Prisma.sql`
+      SELECT ${source.key}::text AS source, station_name, equipment_name, date_time,
+             ${counterHoursSql(source.hour, "minute" in source ? source.minute : undefined)} AS hours
+      FROM ${Prisma.raw(source.table)}
+      WHERE station_name IS NOT NULL
+        AND date_time IS NOT NULL
+        AND date_time >= (${range.from}::date - 1)::text
+        AND date_time < (${range.to}::date + 1)::text
+        ${stationCondition}`
+  )
+
+  return prisma.$queryRaw<HourlyCompressorStatusRow[]>(Prisma.sql`
+    WITH source AS (
+      ${Prisma.join(sources, " UNION ALL ")}
+    ),
+    parsed AS (
+      SELECT
+        station_name AS station,
+        source || '|' || COALESCE(equipment_name, '') AS unit,
+        CASE WHEN date_time ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}[ T][0-9]{2}:[0-9]{2}'
+             THEN substring(date_time from 1 for 19)::timestamp END AS ts,
+        hours
+      FROM source
+    ),
+    chained AS (
+      SELECT
+        station,
+        unit,
+        ts,
+        hours,
+        LAG(ts) OVER w AS previous_ts,
+        LAG(hours) OVER w AS previous_hours
+      FROM parsed
+      WHERE ts IS NOT NULL AND hours IS NOT NULL
+      WINDOW w AS (PARTITION BY station, unit ORDER BY ts)
+    ),
+    samples AS (
+      SELECT
+        station,
+        unit,
+        date_trunc('hour', ts) AS hour_start,
+        CASE
+          WHEN previous_ts IS NOT NULL
+            AND ts - previous_ts <= INTERVAL '1 hour'
+            AND hours >= previous_hours
+          THEN hours > previous_hours
+        END AS is_up
+      FROM chained
+      WHERE ts >= ${range.from}::date
+        AND ts < ${range.to}::date + 1
+    )
+    SELECT
+      station,
+      to_char(hour_start, 'YYYY-MM-DD HH24:MI:SS') AS "hourStart",
+      COUNT(DISTINCT unit) FILTER (WHERE is_up IS NOT NULL) > 0 AS "hasSignal",
+      BOOL_OR(is_up) FILTER (WHERE is_up IS NOT NULL) AS "isUp"
+    FROM samples
+    GROUP BY station, hour_start
+    ORDER BY station, hour_start
   `)
 }

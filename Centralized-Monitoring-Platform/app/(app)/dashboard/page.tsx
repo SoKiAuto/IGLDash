@@ -1,8 +1,8 @@
 ﻿import { DashboardPanel } from "@/components/dashboard-panel"
 import { ExportContextSetter } from "@/components/export-context-setter"
 import { VehicleClassChart } from "@/components/full-fill/vehicle-class-chart"
-import { AttentionCard } from "@/components/overview/attention-card"
 import { ChangeBadge } from "@/components/overview/change-badge"
+import { buildAvailabilityMetric } from "@/components/overview/availability-metric"
 import { FillQualityCard } from "@/components/overview/fill-quality-card"
 import { HeroCard } from "@/components/overview/hero-card"
 import { HourHeatmapCard } from "@/components/overview/hour-heatmap-card"
@@ -15,7 +15,6 @@ import {
 import { UnavailableNote } from "@/components/overview/unavailable-note"
 import { UtilizationGaugeCard } from "@/components/overview/utilization-gauge-card"
 import { RangeSelector } from "@/components/range-selector"
-import { getAmrOverview, getAlarms } from "@/lib/meter-reader"
 import { compressorUtilization, countCompressors } from "@/lib/compressor-utilization"
 import { getDashboardFilters } from "@/lib/dashboard-filters"
 import { resolveRangePreset } from "@/lib/date-range"
@@ -33,6 +32,8 @@ import {
   sumOf,
 } from "@/lib/overview"
 import { getFillDateBounds } from "@/lib/queries/vehicles"
+import { getCombinedStationAvailability } from "@/lib/queries/combined-availability"
+import { getHourlyCompressorStatus } from "@/lib/queries/compressors"
 import { requireSession } from "@/lib/session"
 import { ALL_STATIONS, getStationName } from "@/lib/stations"
 
@@ -76,12 +77,17 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
 
   const bounds = await getFillDateBounds()
   const previousRange = bounds ? getComparisonRange(range, bounds.earliest) : null
-    const [data, amrData, amrAlarmsResult] = await Promise.all([
+  const [data, combinedAvailabilityRows, compressorStatusRows] = await Promise.all([
     loadOverviewData({ station, range, previousRange }),
-    getAmrOverview().catch(() => null),
-    getAlarms({ limit: 4, status: "OPEN" }).catch(() => null),
+    getCombinedStationAvailability({ station, range }).catch((error) => {
+      console.error("[dashboard] combined station availability failed", error)
+      return null
+    }),
+    getHourlyCompressorStatus(range, station).catch((error) => {
+      console.error("[dashboard] compressor availability failed", error)
+      return null
+    }),
   ])
-  const amrAlarms = amrAlarmsResult?.items ?? null
   const hasComparison = previousRange !== null
 
   // Links to the detail pages keep the selected station and date range.
@@ -116,6 +122,35 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
   const previousFullFillRate = fullFillRateOf(data.previousDailyFullFill)
   const uptime = uptimeOf(data.stationUptime)
   const previousUptime = uptimeOf(data.previousStationUptime)
+  const combinedOpenHours =
+    combinedAvailabilityRows === null
+      ? null
+      : sumOf(combinedAvailabilityRows, (row) => row.openHours)
+  const combinedObservedHours =
+    combinedAvailabilityRows === null
+      ? null
+      : sumOf(combinedAvailabilityRows, (row) => row.observedHours)
+  const combinedAvailableHours =
+    combinedAvailabilityRows === null
+      ? null
+      : sumOf(combinedAvailabilityRows, (row) => row.availableHours)
+  const combinedAvailability =
+    combinedObservedHours === null
+      ? null
+      : percentOf(combinedAvailableHours ?? 0, combinedObservedHours)
+  const combinedCoverage =
+    combinedOpenHours === null || combinedObservedHours === null
+      ? null
+      : percentOf(combinedObservedHours, combinedOpenHours)
+  const knownCompressorHours =
+    compressorStatusRows?.filter((row) => row.hasSignal && row.isUp !== null) ?? null
+  const compressorAvailability =
+    knownCompressorHours === null
+      ? null
+      : percentOf(
+          knownCompressorHours.filter((row) => row.isUp).length,
+          knownCompressorHours.length
+        )
   const outageMinutes = data.outageSummary ? data.outageSummary.totalMinutes : null
   const previousOutageMinutes = data.previousOutageSummary
     ? data.previousOutageSummary.totalMinutes
@@ -151,14 +186,14 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
 
   // ---- KPI strip
   const metrics: Metric[] = [
-    {
-      label: "Gas dispensed",
-      value: show(totalKg, formatInteger),
-      unit: "kg",
-      change: hasComparison && (
-        <ChangeBadge change={relativeChange(totalKg, previousKg)} unit="%" />
-      ),
-    },
+    buildAvailabilityMetric({
+      availabilityPercent: combinedAvailability,
+      compressorAvailabilityPercent: compressorAvailability,
+      knownCompressorHours: knownCompressorHours?.length ?? null,
+      observedHours: combinedObservedHours,
+      openHours: combinedOpenHours,
+      coveragePercent: combinedCoverage,
+    }),
     {
       label: "Full-fill rate",
       value: show(fullFillRate, formatPercent),
@@ -168,12 +203,20 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
       note: "Fills ending at or above 200 bar",
     },
     {
-      label: "Station uptime",
+      label: "Activity-based uptime",
       value: show(uptime, formatPercent),
       change: hasComparison && (
         <ChangeBadge change={pointChange(uptime, previousUptime)} unit="pp" />
       ),
-      note: "Up hours of open hours",
+      note: "Any fill, compressor run increase, or gas flow",
+    },
+    {
+      label: "Gas dispensed",
+      value: show(totalKg, formatInteger),
+      unit: "kg",
+      change: hasComparison && (
+        <ChangeBadge change={relativeChange(totalKg, previousKg)} unit="%" />
+      ),
     },
     {
       label: "Power outage downtime",
@@ -293,11 +336,6 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
       : []),
   ]
 
-  const lowestUptime = [...uptimeByStation.entries()]
-    .filter((entry): entry is [string, number] => entry[1] !== null)
-    .map(([stationCode, value]) => ({ station: stationCode, uptime: value }))
-    .sort((a, b) => a.uptime - b.uptime)
-
   const heatmapRows = buildHourlyRows(data.hourlyVehicles ?? []).map((row) => ({
     label: isAllStations ? getStationName(row.label) : row.label,
     values: row.values,
@@ -338,7 +376,11 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
         </DashboardPanel>
       )}
 
-      <KpiStrip metrics={metrics} />
+      <KpiStrip
+        metrics={metrics}
+        featuredMetric="Availability"
+        featuredCompanionMetric="Gas dispensed"
+      />
 
       <div className="grid gap-4 xl:grid-cols-3">
         <div className="xl:col-span-2">
@@ -381,14 +423,6 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
           </DashboardPanel>
         </div>
 
-        <AttentionCard
-          hasPowerData={data.hasPowerData}
-          outageSummary={data.outageSummary}
-          latestOutages={data.latestOutages ?? []}
-          lowestUptime={lowestUptime}
-          href={link("/power")}
-        />
-
         {rankingAvailable ? (
           <RankingToggleCard
             title={isAllStations ? "Top stations" : "Dispensers"}
@@ -403,7 +437,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
           </DashboardPanel>
         )}
 
-        <div className="xl:col-span-2">
+        <div className="xl:col-span-3">
           {data.hourlyVehicles ? (
             <HourHeatmapCard rows={heatmapRows} href={link("/vehicles")} />
           ) : (
@@ -416,4 +450,3 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
     </div>
   )
 }
-

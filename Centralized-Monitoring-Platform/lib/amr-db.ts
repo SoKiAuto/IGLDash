@@ -36,6 +36,7 @@ export type CustomerItem = {
 export type DeviceItem = {
   id: string
   deviceSerialNo: string
+  customerId?: string | null
   meterSerialNo: string | null
   meterSize: string | null
   customerName: string | null
@@ -98,6 +99,77 @@ export async function createAmrCustomer(data: {
   )
 
   return result.rows[0]
+}
+
+export type AmrCustomerDetail = {
+  id: string
+  name: string
+  address: string | null
+  gaId: string
+  devices: {
+    id: string
+    deviceSerialNo: string
+    meterSerialNo: string | null
+    latitude: number | null
+    longitude: number | null
+    meterSize: string | null
+    deviceModel: string | null
+    firmwareVersion: string | null
+    hardwareVersion: string | null
+    configurationVersion: string | null
+    category: string | null
+  }[]
+}
+
+export async function fetchAmrCustomerById(id: string): Promise<AmrCustomerDetail | null> {
+  const customerResult = await amrPool.query(
+    `SELECT id, name, address, "gaId"
+     FROM "Customer"
+     WHERE id = $1`,
+    [id]
+  )
+  const customer = customerResult.rows[0]
+  if (!customer) return null
+
+  const deviceResult = await amrPool.query(
+    `SELECT
+       id,
+       "deviceSerialNo",
+       "meterSerialNo",
+       latitude,
+       longitude,
+       "meterSize",
+       "deviceModel",
+       "firmwareVersion",
+       "hardwareVersion",
+       "configurationVersion",
+       category
+     FROM "Device"
+     WHERE "customerId" = $1
+     ORDER BY "deviceSerialNo"`,
+    [id]
+  )
+
+  return {
+    ...customer,
+    devices: deviceResult.rows,
+  }
+}
+
+export async function updateAmrCustomer(
+  id: string,
+  data: { name: string; gaId: string; address: string | null }
+): Promise<AmrCustomerDetail | null> {
+  const result = await amrPool.query(
+    `UPDATE "Customer"
+     SET name = $1, address = $2, "gaId" = $3
+     WHERE id = $4
+       AND EXISTS (SELECT 1 FROM "GeographicalArea" WHERE id = $3)
+     RETURNING id`,
+    [data.name.trim(), data.address?.trim() || null, data.gaId, id]
+  )
+  if (result.rowCount === 0) return null
+  return fetchAmrCustomerById(id)
 }
 
 export type AmrOverviewData = {
@@ -271,6 +343,7 @@ export async function fetchAmrCustomersGrouped(params: {
       deviceSerialNo: r.deviceSerialNo,
       meterSerialNo: r.meterSerialNo,
       meterSize: r.meterSize,
+      customerId: r.customerId,
       customerName: r.customerName,
       gaName: r.gaName,
       category: r.category,

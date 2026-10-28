@@ -41,7 +41,21 @@ export function ConsumptionAreaChart({
   // Each chart on a page needs its own gradient id. useId contains colons, which break url(#id).
   const gradientId = `consumptionFill-${useId().replace(/:/g, "")}`
   const chartConfig = { value: { label: seriesLabel, color } } satisfies ChartConfig
-  const suspectPoints = data.filter((point) => point.suspect)
+  const chartData = data.map((point, index) => ({
+    ...point,
+    chartKey: `point-${index}`,
+  }))
+  const chartLabelByKey = new Map(
+    chartData.map((point) => [point.chartKey, point.label])
+  )
+  const chartTicks = ticks
+    ? [...new Set(
+        ticks
+          .map((tick) => data.findIndex((point) => point.label === tick))
+          .filter((index) => index >= 0)
+          .map((index) => chartData[index].chartKey)
+      )]
+    : undefined
 
   // Hands the values to the card's Download button.
   const table = useMemo(
@@ -52,7 +66,7 @@ export function ConsumptionAreaChart({
 
   return (
     <ChartContainer config={chartConfig} className="aspect-auto h-64 w-full">
-      <AreaChart data={data} accessibilityLayer>
+      <AreaChart data={chartData} accessibilityLayer>
         <defs>
           <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
             <stop offset="5%" stopColor="var(--color-value)" stopOpacity={0.35} />
@@ -61,15 +75,25 @@ export function ConsumptionAreaChart({
         </defs>
         <CartesianGrid vertical={false} />
         <XAxis
-          dataKey="label"
-          ticks={ticks}
+          dataKey="chartKey"
+          ticks={chartTicks}
+          tickFormatter={(key: string) => chartLabelByKey.get(key) ?? ""}
           tickLine={false}
           axisLine={false}
           tickMargin={8}
           minTickGap={24}
         />
         <YAxis tickLine={false} axisLine={false} width="auto" domain={[0, "auto"]} />
-        <ChartTooltip cursor={false} content={<ChartTooltipContent />} />
+        <ChartTooltip
+          cursor={false}
+          content={
+            <ChartTooltipContent
+              labelFormatter={(key) =>
+                chartLabelByKey.get(String(key)) ?? String(key)
+              }
+            />
+          }
+        />
         <Area
           dataKey="value"
           type="monotone"
@@ -79,16 +103,18 @@ export function ConsumptionAreaChart({
           dot={false}
           activeDot={{ r: 4 }}
         />
-        {suspectPoints.map((point) => (
-          <ReferenceDot
-            key={point.label}
-            x={point.label}
-            y={point.value}
-            r={4}
-            fill="var(--destructive)"
-            stroke="none"
-          />
-        ))}
+        {chartData
+          .filter((point) => point.suspect)
+          .map((point) => (
+            <ReferenceDot
+              key={point.chartKey}
+              x={point.chartKey}
+              y={point.value}
+              r={4}
+              fill="var(--destructive)"
+              stroke="none"
+            />
+          ))}
       </AreaChart>
     </ChartContainer>
   )

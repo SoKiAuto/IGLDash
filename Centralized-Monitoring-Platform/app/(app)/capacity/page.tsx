@@ -19,6 +19,7 @@ import {
   sumOf,
 } from "@/lib/overview"
 import { getDispenserSummary } from "@/lib/queries/dispensers"
+import { getDispenserArmVehicleBreakdown } from "@/lib/queries/dispenser-arms"
 import { getDailyVehicles, getFillDateBounds } from "@/lib/queries/vehicles"
 import { requireSession } from "@/lib/session"
 import { ALL_STATIONS, getStationName } from "@/lib/stations"
@@ -60,13 +61,19 @@ export default async function CapacityPage({ searchParams }: CapacityPageProps) 
   const { station, range } = filters
   const stationLabel =
     station === ALL_STATIONS ? "All stations" : getStationName(station)
+  const periodDays =
+    Math.floor(
+      (Date.parse(`${range.to}T00:00:00Z`) - Date.parse(`${range.from}T00:00:00Z`)) /
+        86_400_000
+    ) + 1
 
   const bounds = await getFillDateBounds()
   const previousRange = bounds ? getComparisonRange(range, bounds.earliest) : null
   const hasComparison = previousRange !== null
 
-  const [summary, dailyVehicles, previousDailyVehicles] = await Promise.all([
+  const [summary, armBreakdown, dailyVehicles, previousDailyVehicles] = await Promise.all([
     getDispenserSummary({ station, range }),
+    getDispenserArmVehicleBreakdown({ station, range }),
     getDailyVehicles({ station, range }),
     previousRange
       ? getDailyVehicles({ station, range: previousRange })
@@ -151,6 +158,34 @@ export default async function CapacityPage({ searchParams }: CapacityPageProps) 
       },
     },
   }))
+
+  const armTableRows: SortableRow[] = armBreakdown.map((row) => {
+    const ratedCapacityKg = getCapacityKgPerHour(row.station) * 24 * periodDays
+    const utilization = utilizationPercent(row.kg, ratedCapacityKg)
+    return {
+      id: `${row.station}|${row.serialNumber}|${row.side}|${row.vehicleClass}`,
+      cells: {
+        station: { text: getStationName(row.station), sort: getStationName(row.station) },
+        arm: {
+          text: `${row.serialNumber} · ${row.side}`,
+          sort: `${row.serialNumber} ${row.side}`,
+        },
+        vehicleClass: { text: row.vehicleClass, sort: row.vehicleClass },
+        fills: { text: formatInteger(row.fills), sort: row.fills },
+        kg: { text: formatInteger(row.kg), sort: row.kg },
+        utilization: {
+          text: utilization === null ? "--" : formatPercent(utilization),
+          sort: utilization ?? -1,
+          percent: utilization ?? 0,
+          color: CHART_COLORS.primary,
+        },
+        fillShare: {
+          text: formatPercent(row.fillSharePercent),
+          sort: row.fillSharePercent,
+        },
+      },
+    }
+  })
 
   const metrics: Metric[] = [
     {
@@ -241,6 +276,31 @@ export default async function CapacityPage({ searchParams }: CapacityPageProps) 
           ]}
           rows={tableRows}
         />
+      </DashboardPanel>
+
+      <DashboardPanel
+        title="Dispenser utilization by arm and vehicle category"
+        description="Utilization uses the existing station per-dispenser rating for each arm over 24 hours per calendar day. Vehicle type is estimated from fill size: auto-rickshaw up to 4 kg, car over 4 through 12 kg, and heavy over 12 kg."
+      >
+        {armTableRows.length > 0 ? (
+          <SortableTable
+            columns={[
+              { key: "station", label: "Station", align: "left" },
+              { key: "arm", label: "Dispenser arm", align: "left" },
+              { key: "vehicleClass", label: "Vehicle category", align: "left" },
+              { key: "fills", label: "Fills" },
+              { key: "kg", label: "Gas (kg)" },
+              { key: "utilization", label: "Rated capacity used" },
+              { key: "fillShare", label: "Share of arm fills" },
+            ]}
+            rows={armTableRows}
+            pageSize={15}
+          />
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            No arm-level dispenser readings were found for this station and date range.
+          </p>
+        )}
       </DashboardPanel>
     </div>
   )

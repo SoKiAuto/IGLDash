@@ -249,6 +249,22 @@ export default async function FullFillPage({ searchParams }: FullFillPageProps) 
           }))}
         />
       </DashboardPanel>
+
+      <DashboardPanel
+        title="Stationary cascade and delivery pressure correlation"
+        description="Delivery pressure is the dispenser fill end pressure. Correlation is not shown until the matching stationary-cascade source is confirmed."
+      >
+        <p className="text-sm text-muted-foreground">
+          Not configured for {stationLabel}. The Prisma schema contains candidate pressure fields such as
+          `priority_pressure`, `station_inlet_pressure`, `storage_pressure`, stage discharge pressures,
+          and dispenser-priority fields, but does not identify which field is stationary cascade pressure
+          at each station. Configure and validate that mapping before calculating paired pressure
+          differences or correlation.
+        </p>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Planned matching: nearest valid cascade sample at or before each fill, no older than 15 minutes.
+        </p>
+      </DashboardPanel>
     </div>
   )
 }

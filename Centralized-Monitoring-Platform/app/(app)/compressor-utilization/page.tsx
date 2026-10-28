@@ -313,6 +313,19 @@ export default async function CompressorUtilizationPage({ searchParams }: Compre
           emptyMessage="No compressor readings in this period."
         />
       </DashboardPanel>
+
+      <DashboardPanel
+        title="Compressor flow-capacity utilization"
+        description="Time-weighted average actual discharge flow / rated discharge flow x 100."
+      >
+        <p className="text-sm text-muted-foreground">
+          Not configured. The Prisma schema has possible actual-flow fields, including
+          `icl_compressor_readings.discharge_flow_rate`, `tulip_compressor_readings.discharge_flow`,
+          and Bukt FIT current-flow fields, but their station/equipment mapping and units need validation.
+          Rated flow capacity by compressor is not stored in the schema. Capacity utilization will remain
+          unavailable until actual-flow sources, units, and rated values are supplied.
+        </p>
+      </DashboardPanel>
     </div>
   )
 }

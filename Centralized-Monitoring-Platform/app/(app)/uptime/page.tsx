@@ -1,10 +1,12 @@
 import { DashboardPanel } from "@/components/dashboard-panel"
+import { buildAvailabilityMetric } from "@/components/overview/availability-metric"
 import { ChangeBadge } from "@/components/overview/change-badge"
 import { KpiStrip, type Metric } from "@/components/overview/kpi-strip"
 import { StationDetailTable } from "@/components/uptime/station-detail-table"
 import { HeroPanel } from "@/components/vehicles/hero-panel"
 import { PageHeader } from "@/components/vehicles/page-header"
 import { RateTrendChart } from "@/components/vehicles/rate-trend-chart"
+import { SortableTable, type SortableRow } from "@/components/sortable-table"
 import { getDashboardFilters } from "@/lib/dashboard-filters"
 import { formatDate, formatInteger, formatPercent } from "@/lib/format"
 import {
@@ -14,6 +16,10 @@ import {
   relativeChange,
   sumOf,
 } from "@/lib/overview"
+import {
+  getCombinedStationAvailability,
+  type CombinedAvailabilityRow,
+} from "@/lib/queries/combined-availability"
 import {
   getDailyUptime,
   getStationDownHours,
@@ -93,6 +99,7 @@ export default async function UptimePage({ searchParams }: UptimePageProps) {
         ? getStationDownHours({ station, range: previousRange }).catch(() => null)
         : Promise.resolve(null),
     ])
+  const combinedAvailability = await getCombinedStationAvailability({ station, range })
 
   // ---- totals and comparison with the previous period
   const upHours = sumOf(stationUptime, (row) => row.upHours)
@@ -100,6 +107,14 @@ export default async function UptimePage({ searchParams }: UptimePageProps) {
   const closedDays = sumOf(stationUptime, (row) => row.closedDays)
   const closedHours = sumOf(stationUptime, (row) => row.closedHours)
   const uptime = uptimeOf(stationUptime)
+  const combinedOpenHours = sumOf(combinedAvailability, (row) => row.openHours)
+  const combinedObservedHours = sumOf(combinedAvailability, (row) => row.observedHours)
+  const combinedAvailableHours = sumOf(combinedAvailability, (row) => row.availableHours)
+  const combinedRate = percentOf(combinedAvailableHours, combinedObservedHours)
+  const combinedCoverage = percentOf(combinedObservedHours, combinedOpenHours)
+  const knownCompressorHours = sumOf(combinedAvailability, (row) => row.knownCompressorHours)
+  const upCompressorHours = sumOf(combinedAvailability, (row) => row.upCompressorHours)
+  const compressorAvailability = percentOf(upCompressorHours, knownCompressorHours)
 
   const previousUptime = previousDailyUptime ? uptimeOf(previousDailyUptime) : null
 
@@ -165,6 +180,14 @@ export default async function UptimePage({ searchParams }: UptimePageProps) {
         ) : undefined,
       note: `No fill, compressor off, pressure ${STATION_DOWN_MAX_PRESSURE_BAR} bar or below`,
     },
+    buildAvailabilityMetric({
+      availabilityPercent: combinedRate,
+      compressorAvailabilityPercent: compressorAvailability,
+      knownCompressorHours,
+      observedHours: combinedObservedHours,
+      openHours: combinedOpenHours,
+      coveragePercent: combinedCoverage,
+    }),
     {
       label: "Closed days",
       value: formatInteger(closedDays),
@@ -200,6 +223,24 @@ export default async function UptimePage({ searchParams }: UptimePageProps) {
       sources: describeDataSources(row),
     }
   })
+
+  const combinedRows: SortableRow[] = combinedAvailability.map((row: CombinedAvailabilityRow) => ({
+    id: row.station,
+    cells: {
+      station: { text: getStationName(row.station), sort: getStationName(row.station) },
+      availability: {
+        text: row.availabilityPercent === null ? "--" : formatPercent(row.availabilityPercent),
+        sort: row.availabilityPercent ?? -1,
+      },
+      availableHours: { text: formatInteger(row.availableHours), sort: row.availableHours },
+      observedHours: { text: formatInteger(row.observedHours), sort: row.observedHours },
+      openHours: { text: formatInteger(row.openHours), sort: row.openHours },
+      coverage: {
+        text: row.coveragePercent === null ? "--" : formatPercent(row.coveragePercent),
+        sort: row.coveragePercent ?? -1,
+      },
+    },
+  }))
 
   return (
     <div className="flex flex-col gap-4">
@@ -248,7 +289,35 @@ export default async function UptimePage({ searchParams }: UptimePageProps) {
         />
       </HeroPanel>
 
-      <KpiStrip metrics={metrics} />
+      <KpiStrip
+        metrics={metrics}
+        featuredMetric="Availability"
+        featuredCompanionMetric="Hours up"
+      />
+
+      <DashboardPanel
+        title="Combined dispenser and compressor availability"
+        description="A counted hour requires a dispenser fill and a recent compressor-counter signal. A recent counter increase means compressor up; no-fill hours and counter gaps over one hour are unknown and excluded."
+      >
+        {combinedRows.length > 0 ? (
+          <SortableTable
+            columns={[
+              { key: "station", label: "Station", align: "left" },
+              { key: "availability", label: "Availability" },
+              { key: "availableHours", label: "Both up (h)" },
+              { key: "observedHours", label: "Observed (h)" },
+              { key: "openHours", label: "Open (h)" },
+              { key: "coverage", label: "Coverage" },
+            ]}
+            rows={combinedRows}
+            pageSize={10}
+          />
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            No open station hours are available for this range.
+          </p>
+        )}
+      </DashboardPanel>
 
       <DashboardPanel
         title={isAllStations ? "By station" : "Station detail"}

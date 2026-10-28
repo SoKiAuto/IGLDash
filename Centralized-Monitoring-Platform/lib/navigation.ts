@@ -11,6 +11,7 @@ import {
   Flame,
   Users,
   Settings,
+  TriangleAlert,
 } from "lucide-react"
 
 export type NavigationLink = {
@@ -38,6 +39,7 @@ export const MONITORING_ITEMS: NavigationEntry[] = [
   { title: "Daily vehicles", href: "/vehicles", icon: Car },
   { title: "Full-fill rate", href: "/full-fill", icon: Fuel },
   { title: "Station uptime", href: "/uptime", icon: Activity },
+  { title: "Exception management", href: "/exceptions", icon: TriangleAlert },
   {
     title: "Outages",
     icon: Zap,
