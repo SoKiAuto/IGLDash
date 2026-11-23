@@ -153,6 +153,98 @@ export async function getCompressorDailyRuns(range: DateRange): Promise<Compress
   `)
 }
 
+export type CompressorFlowRow = {
+  station: string
+  unit: string
+  averageFlow: number
+  coveredHours: number
+}
+
+const MAX_FLOW_SAMPLE_GAP_MINUTES = 15
+
+// Flow readings are weighted by the time until the next fresh sample.
+export async function getCompressorAverageFlows(
+  range: DateRange,
+  station: StationFilter = ALL_STATIONS
+): Promise<CompressorFlowRow[]> {
+  const stationFilter = station === ALL_STATIONS
+    ? Prisma.empty
+    : Prisma.sql`AND station_name = ${station}`
+  const start = Prisma.sql`${range.from}::date::text`
+  const end = Prisma.sql`(${range.to}::date + 1)::text`
+  const sampleEnd = Prisma.sql`(${range.to}::date + 2)::text`
+  const sources = [
+    { key: "icl", table: "icl_compressor_readings", expression: "discharge_flow_rate" },
+    {
+      key: "tulip",
+      table: "tulip_compressor_readings",
+      expression: "COALESCE(NULLIF(btrim(discharge_flow), ''), suction_flow)",
+    },
+    { key: "chhatrasal_kpcl", table: "chhatrashal_kpcl_compressor_readings", expression: "compressor_suction_flow" },
+    { key: "sgtn2_kpcl", table: "sgtn2_kpcl_compressor_readings", expression: "compressor_suction_flow" },
+    {
+      key: "bukt",
+      table: "bukt_compressor_readings",
+      expression: `CASE WHEN btrim(fit1_current_flow) ~ '^[0-9]+([.][0-9]+)?$'
+          OR btrim(fit2_current_flow) ~ '^[0-9]+([.][0-9]+)?$'
+          OR btrim(fit3_current_flow) ~ '^[0-9]+([.][0-9]+)?$'
+        THEN CASE WHEN btrim(fit1_current_flow) ~ '^[0-9]+([.][0-9]+)?$' THEN btrim(fit1_current_flow)::numeric ELSE 0 END
+        + CASE WHEN btrim(fit2_current_flow) ~ '^[0-9]+([.][0-9]+)?$' THEN btrim(fit2_current_flow)::numeric ELSE 0 END
+        + CASE WHEN btrim(fit3_current_flow) ~ '^[0-9]+([.][0-9]+)?$' THEN btrim(fit3_current_flow)::numeric ELSE 0 END END`,
+    },
+  ] as const
+
+  const sourceQueries = sources.map(({ key, table, expression }) => {
+    const flow = Prisma.raw(expression)
+    const numericFlow = key === "bukt"
+      ? Prisma.sql`(${flow})`
+      : Prisma.sql`CASE WHEN btrim(${flow}) ~ '^[0-9]+([.][0-9]+)?$'
+          THEN btrim(${flow})::numeric END`
+
+    return Prisma.sql`
+      SELECT ${key}::text AS source, station_name, equipment_name, date_time,
+        ${numericFlow} AS flow
+      FROM ${Prisma.raw(table)}
+      WHERE station_name IS NOT NULL AND equipment_name IS NOT NULL
+        AND date_time >= ${start} AND date_time < ${sampleEnd}
+        ${stationFilter}
+    `
+  })
+
+  return prisma.$queryRaw<CompressorFlowRow[]>(Prisma.sql`
+    WITH source AS (
+      ${Prisma.join(sourceQueries, " UNION ALL ")}
+    ), parsed AS (
+      SELECT source, station_name AS station,
+        source || '|' || equipment_name AS unit,
+        substring(date_time from 1 for 19)::timestamp AS sample_at,
+        flow
+      FROM source
+      WHERE date_time ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}[ T][0-9]{2}:[0-9]{2}'
+        AND flow IS NOT NULL AND flow >= 0
+    ), intervals AS (
+      SELECT station, unit, sample_at, flow,
+        LEAD(sample_at) OVER (PARTITION BY station, unit ORDER BY sample_at) AS next_at
+      FROM parsed
+    ), weighted AS (
+      SELECT station, unit, flow,
+        EXTRACT(EPOCH FROM (LEAST(next_at, sample_at + make_interval(mins => ${MAX_FLOW_SAMPLE_GAP_MINUTES}), ${end}::timestamp) - sample_at)) AS seconds
+      FROM intervals
+      WHERE sample_at >= ${start}::timestamp AND sample_at < ${end}::timestamp
+        AND next_at IS NOT NULL
+        AND next_at > sample_at
+        AND next_at <= sample_at + make_interval(mins => ${MAX_FLOW_SAMPLE_GAP_MINUTES})
+    )
+    SELECT station, unit,
+      (SUM(flow * seconds) / NULLIF(SUM(seconds), 0))::float8 AS "averageFlow",
+      (SUM(seconds) / 3600)::float8 AS "coveredHours"
+    FROM weighted
+    WHERE seconds > 0
+    GROUP BY station, unit
+    ORDER BY station, unit
+  `)
+}
+
 export type HourlyCompressorStatusRow = {
   station: string
   hourStart: string

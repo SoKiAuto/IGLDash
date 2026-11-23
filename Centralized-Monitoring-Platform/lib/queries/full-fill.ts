@@ -174,15 +174,26 @@ export async function getCascadeDeliveryPressureCorrelation(params: {
   const stationFilter = station === ALL_STATIONS
     ? Prisma.empty
     : Prisma.sql`AND fill.station_name = ${station}`
+  const pressureStationFilter = station === ALL_STATIONS
+    ? Prisma.empty
+    : Prisma.sql`AND station_name = ${station}`
+  const pressureStart = Prisma.sql`(${range.from}::date - INTERVAL '15 minutes')::text`
+  const pressureEnd = Prisma.sql`(${range.to}::date + 1)::text`
 
   const [row] = await prisma.$queryRaw<PressureCorrelationRow[]>(Prisma.sql`
     WITH pressure_source AS (
       SELECT station_name, date_time, priority_pressure FROM bukt_compressor_readings
+        WHERE date_time >= ${pressureStart} AND date_time < ${pressureEnd} ${pressureStationFilter}
       UNION ALL SELECT station_name, date_time, priority_pressure FROM chhatrashal_kpcl_compressor_readings
+        WHERE date_time >= ${pressureStart} AND date_time < ${pressureEnd} ${pressureStationFilter}
       UNION ALL SELECT station_name, date_time, priority_pressure FROM delta_compressor_readings
+        WHERE date_time >= ${pressureStart} AND date_time < ${pressureEnd} ${pressureStationFilter}
       UNION ALL SELECT station_name, date_time, priority_pressure FROM icl_compressor_readings
+        WHERE date_time >= ${pressureStart} AND date_time < ${pressureEnd} ${pressureStationFilter}
       UNION ALL SELECT station_name, date_time, priority_pressure FROM sgtn2_kpcl_compressor_readings
+        WHERE date_time >= ${pressureStart} AND date_time < ${pressureEnd} ${pressureStationFilter}
       UNION ALL SELECT station_name, date_time, priority_pressure FROM tulip_compressor_readings
+        WHERE date_time >= ${pressureStart} AND date_time < ${pressureEnd} ${pressureStationFilter}
     ), parsed_pressure AS (
       SELECT station_name, substring(date_time from 1 for 19)::timestamp AS read_at,
         CASE WHEN btrim(priority_pressure) ~ '^[0-9]+([.][0-9]+)?$'
@@ -190,23 +201,43 @@ export async function getCascadeDeliveryPressureCorrelation(params: {
       FROM pressure_source
       WHERE date_time ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}[ T][0-9]{2}:[0-9]{2}'
         AND priority_pressure IS NOT NULL
-    ), paired AS (
-      SELECT cascade.pressure_bar AS cascade_bar,
-        fill.end_pressure_bar AS delivery_bar
+    ), pressure_samples AS (
+      SELECT station_name, read_at, MAX(pressure_bar) AS pressure_bar
+      FROM parsed_pressure
+      WHERE pressure_bar BETWEEN 0 AND 500
+      GROUP BY station_name, read_at
+    ), fills AS (
+      SELECT ROW_NUMBER() OVER () AS fill_id, station_name,
+        ended_at AS fill_at, end_pressure_bar AS delivery_bar
       FROM mv_dispenser_fills AS fill
-      JOIN LATERAL (
-        SELECT pressure_bar
-        FROM parsed_pressure
-        WHERE station_name = fill.station_name
-          AND read_at <= fill.ended_at
-          AND read_at >= fill.ended_at - INTERVAL '15 minutes'
-          AND pressure_bar BETWEEN 0 AND 500
-        ORDER BY read_at DESC
-        LIMIT 1
-      ) AS cascade ON TRUE
       WHERE ${rangeCondition(range)}
         AND fill.end_pressure_bar BETWEEN 0 AND 500
         ${stationFilter}
+    ), events AS (
+      SELECT station_name, read_at AS event_at, 0 AS event_type,
+        pressure_bar, read_at AS pressure_at,
+        NULL::bigint AS fill_id, NULL::numeric AS delivery_bar
+      FROM pressure_samples
+      UNION ALL
+      SELECT station_name, fill_at, 1, NULL::numeric, NULL::timestamp,
+        fill_id, delivery_bar
+      FROM fills
+    ), pressure_groups AS (
+      SELECT *, SUM(CASE WHEN event_type = 0 THEN 1 ELSE 0 END) OVER (
+        PARTITION BY station_name ORDER BY event_at, event_type
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+      ) AS pressure_group
+      FROM events
+    ), carried_pressure AS (
+      SELECT *,
+        MAX(pressure_bar) OVER (PARTITION BY station_name, pressure_group) AS cascade_bar,
+        MAX(pressure_at) OVER (PARTITION BY station_name, pressure_group) AS cascade_at
+      FROM pressure_groups
+    ), paired AS (
+      SELECT fill_id, delivery_bar, cascade_bar, cascade_at, event_at AS fill_at
+      FROM carried_pressure
+      WHERE fill_id IS NOT NULL
+        AND pressure_group > 0
     )
     SELECT COUNT(*)::int AS "pairedFills",
       corr(cascade_bar, delivery_bar)::float8 AS correlation,
@@ -214,6 +245,8 @@ export async function getCascadeDeliveryPressureCorrelation(params: {
       AVG(delivery_bar)::float8 AS "averageDeliveryPressure",
       AVG(cascade_bar - delivery_bar)::float8 AS "averagePressureGap"
     FROM paired
+    WHERE cascade_at >= fill_at - INTERVAL '15 minutes'
+      AND cascade_at <= fill_at
   `)
 
   return row ?? {

@@ -12,6 +12,7 @@ import { formatDate, formatDecimal, formatInteger, formatPercent } from "@/lib/f
 import { getComparisonRange, pointChange, relativeChange } from "@/lib/overview"
 import {
   getCompressorDailyRuns,
+  getCompressorAverageFlows,
   parseCompressorUnit,
   type CompressorDayRow,
 } from "@/lib/queries/compressors"
@@ -75,9 +76,10 @@ export default async function CompressorUtilizationPage({ searchParams }: Compre
   const hasComparison = previousRange !== null
 
   // Both periods are read for every station, then narrowed to the selected one.
-  const [allRows, allPreviousRows] = await Promise.all([
+  const [allRows, allPreviousRows, allFlowRows] = await Promise.all([
     getCompressorDailyRuns(range),
     previousRange ? getCompressorDailyRuns(previousRange) : Promise.resolve(null),
+    getCompressorAverageFlows(range, station),
   ])
 
   const stationsWithData = STATIONS.filter((candidate) =>
@@ -106,6 +108,7 @@ export default async function CompressorUtilizationPage({ searchParams }: Compre
       ? allPreviousRows
       : allPreviousRows.filter((row) => row.station === station)
     : null
+  const flowRows = allFlowRows
 
   const stationLabel = isAllStations ? "All stations" : getStationName(station)
   const utilization = utilizationOf(rows)
@@ -316,16 +319,45 @@ export default async function CompressorUtilizationPage({ searchParams }: Compre
 
       <DashboardPanel
         title="Compressor flow-capacity utilization"
-        description="Time-weighted average actual discharge flow / rated discharge flow x 100."
+        description="Time-weighted flow readings are averaged per compressor. Utilization is actual flow ÷ rated flow × 100."
       >
-        <p className="text-sm text-muted-foreground">
-          Actual flow fields are `icl_compressor_readings.discharge_flow_rate`,
-          `tulip_compressor_readings.discharge_flow` (or `suction_flow` where that is the available
-          compressor flow), and `compressor_suction_flow` in the KPCL compressor tables. Bukt readings
-          provide FIT current-flow fields. The flow units and per-compressor rated discharge capacities
-          are not recorded in the project, so a percentage cannot be calculated reliably yet. Rated
-          capacity must come from each compressor or flow-meter nameplate/specification; it cannot be
-          inferred from observed operating flow.
+        {flowRows.length > 0 ? (
+          <SortableTable
+            columns={[
+              { key: "station", label: "Station", align: "left" },
+              { key: "compressor", label: "Compressor", align: "left" },
+              { key: "actual", label: "Avg actual flow · source unit" },
+              { key: "coverage", label: "Flow coverage" },
+              { key: "rated", label: "Rated flow" },
+              { key: "utilization", label: "Capacity utilization" },
+            ]}
+            rows={flowRows.map((row) => {
+              const label = parseCompressorUnit(row.unit).label
+              return {
+                id: `${row.station}|${row.unit}`,
+                cells: {
+                  station: { text: getStationName(row.station), sort: getStationName(row.station) },
+                  compressor: { text: label, sort: label },
+                  actual: { text: formatDecimal(row.averageFlow), sort: row.averageFlow },
+                  coverage: { text: `${formatDecimal(row.coveredHours)} h`, sort: row.coveredHours },
+                  rated: { text: "--", sort: 0 },
+                  utilization: { text: "--", sort: 0 },
+                },
+              }
+            })}
+            pageSize={10}
+            emptyMessage="No valid compressor flow readings in this period."
+          />
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            No valid compressor flow readings were found for {stationLabel} in this period.
+          </p>
+        )}
+        <p className="mt-3 text-sm text-muted-foreground">
+          Actual flow uses ICL discharge flow, Tulip discharge flow (falling back to suction flow),
+          KPCL compressor suction flow, and summed Bukt FIT current-flow readings. A stale gap over
+          15 minutes is excluded. Flow units differ by source and are shown as recorded. Rated flow
+          is not in the data; it needs each compressor’s nameplate/specification to calculate utilization.
         </p>
       </DashboardPanel>
     </div>
