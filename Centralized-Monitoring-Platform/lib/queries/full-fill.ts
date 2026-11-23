@@ -155,3 +155,72 @@ export async function getUnmeasuredFillCount(params: {
 
   return row?.count ?? 0
 }
+
+export type PressureCorrelationRow = {
+  pairedFills: number
+  correlation: number | null
+  averageCascadePressure: number | null
+  averageDeliveryPressure: number | null
+  averagePressureGap: number | null
+}
+
+// Pair each fill with the latest stationary-cascade priority pressure in the
+// preceding 15 minutes, then summarize the paired measurements.
+export async function getCascadeDeliveryPressureCorrelation(params: {
+  station: StationFilter
+  range: DateRange
+}): Promise<PressureCorrelationRow> {
+  const { station, range } = params
+  const stationFilter = station === ALL_STATIONS
+    ? Prisma.empty
+    : Prisma.sql`AND fill.station_name = ${station}`
+
+  const [row] = await prisma.$queryRaw<PressureCorrelationRow[]>(Prisma.sql`
+    WITH pressure_source AS (
+      SELECT station_name, date_time, priority_pressure FROM bukt_compressor_readings
+      UNION ALL SELECT station_name, date_time, priority_pressure FROM chhatrashal_kpcl_compressor_readings
+      UNION ALL SELECT station_name, date_time, priority_pressure FROM delta_compressor_readings
+      UNION ALL SELECT station_name, date_time, priority_pressure FROM icl_compressor_readings
+      UNION ALL SELECT station_name, date_time, priority_pressure FROM sgtn2_kpcl_compressor_readings
+      UNION ALL SELECT station_name, date_time, priority_pressure FROM tulip_compressor_readings
+    ), parsed_pressure AS (
+      SELECT station_name, substring(date_time from 1 for 19)::timestamp AS read_at,
+        CASE WHEN btrim(priority_pressure) ~ '^[0-9]+([.][0-9]+)?$'
+          THEN btrim(priority_pressure)::numeric END AS pressure_bar
+      FROM pressure_source
+      WHERE date_time ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}[ T][0-9]{2}:[0-9]{2}'
+        AND priority_pressure IS NOT NULL
+    ), paired AS (
+      SELECT cascade.pressure_bar AS cascade_bar,
+        fill.end_pressure_bar AS delivery_bar
+      FROM mv_dispenser_fills AS fill
+      JOIN LATERAL (
+        SELECT pressure_bar
+        FROM parsed_pressure
+        WHERE station_name = fill.station_name
+          AND read_at <= fill.ended_at
+          AND read_at >= fill.ended_at - INTERVAL '15 minutes'
+          AND pressure_bar BETWEEN 0 AND 500
+        ORDER BY read_at DESC
+        LIMIT 1
+      ) AS cascade ON TRUE
+      WHERE ${rangeCondition(range)}
+        AND fill.end_pressure_bar BETWEEN 0 AND 500
+        ${stationFilter}
+    )
+    SELECT COUNT(*)::int AS "pairedFills",
+      corr(cascade_bar, delivery_bar)::float8 AS correlation,
+      AVG(cascade_bar)::float8 AS "averageCascadePressure",
+      AVG(delivery_bar)::float8 AS "averageDeliveryPressure",
+      AVG(cascade_bar - delivery_bar)::float8 AS "averagePressureGap"
+    FROM paired
+  `)
+
+  return row ?? {
+    pairedFills: 0,
+    correlation: null,
+    averageCascadePressure: null,
+    averageDeliveryPressure: null,
+    averagePressureGap: null,
+  }
+}

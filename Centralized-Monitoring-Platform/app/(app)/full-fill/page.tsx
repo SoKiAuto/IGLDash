@@ -29,6 +29,7 @@ import {
   getFullFillBreakdown,
   getFullFillByVehicleClass,
   getUnmeasuredFillCount,
+  getCascadeDeliveryPressureCorrelation,
 } from "@/lib/queries/full-fill"
 import { getDailyVehicles, getFillDateBounds } from "@/lib/queries/vehicles"
 import { requireSession } from "@/lib/session"
@@ -89,6 +90,7 @@ export default async function FullFillPage({ searchParams }: FullFillPageProps) 
     vehicleClassFills,
     unmeasuredFills,
     dailyVehicles,
+    pressureCorrelation,
   ] = await Promise.all([
     getDailyFullFill({ station, range }),
     previousRange
@@ -98,6 +100,7 @@ export default async function FullFillPage({ searchParams }: FullFillPageProps) 
     getFullFillByVehicleClass({ station, range }),
     getUnmeasuredFillCount({ station, range }),
     getDailyVehicles({ station, range }),
+    getCascadeDeliveryPressureCorrelation({ station, range }),
   ])
 
   // ---- totals and comparison with the previous period
@@ -252,18 +255,47 @@ export default async function FullFillPage({ searchParams }: FullFillPageProps) 
 
       <DashboardPanel
         title="Stationary cascade and delivery pressure correlation"
-        description="Delivery pressure is the dispenser fill end pressure. Correlation is not shown until the matching stationary-cascade source is confirmed."
+        description="Stationary cascade pressure uses priority_pressure; delivery pressure uses the dispenser fill end pressure. Each fill is paired with the latest cascade reading from the prior 15 minutes."
       >
-        <p className="text-sm text-muted-foreground">
-          Not configured for {stationLabel}. The Prisma schema contains candidate pressure fields such as
-          `priority_pressure`, `station_inlet_pressure`, `storage_pressure`, stage discharge pressures,
-          and dispenser-priority fields, but does not identify which field is stationary cascade pressure
-          at each station. Configure and validate that mapping before calculating paired pressure
-          differences or correlation.
-        </p>
-        <p className="mt-2 text-sm text-muted-foreground">
-          Planned matching: nearest valid cascade sample at or before each fill, no older than 15 minutes.
-        </p>
+        {pressureCorrelation.pairedFills > 0 ? (
+          <dl className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <div>
+              <dt className="text-sm text-muted-foreground">Paired fills</dt>
+              <dd className="text-xl font-semibold">{formatInteger(pressureCorrelation.pairedFills)}</dd>
+            </div>
+            <div>
+              <dt className="text-sm text-muted-foreground">Pearson correlation</dt>
+              <dd className="text-xl font-semibold">
+                {pressureCorrelation.correlation === null
+                  ? "--"
+                  : formatDecimal(pressureCorrelation.correlation)}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-sm text-muted-foreground">Avg cascade pressure</dt>
+              <dd className="text-xl font-semibold">
+                {pressureCorrelation.averageCascadePressure === null
+                  ? "--"
+                  : `${formatDecimal(pressureCorrelation.averageCascadePressure)} bar`}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-sm text-muted-foreground">Avg delivery pressure</dt>
+              <dd className="text-xl font-semibold">
+                {pressureCorrelation.averageDeliveryPressure === null
+                  ? "--"
+                  : `${formatDecimal(pressureCorrelation.averageDeliveryPressure)} bar`}
+              </dd>
+            </div>
+            <div className="text-sm text-muted-foreground sm:col-span-2 lg:col-span-4">
+              Average cascade minus delivery pressure: {pressureCorrelation.averagePressureGap === null ? "--" : `${formatDecimal(pressureCorrelation.averagePressureGap)} bar`}.
+            </div>
+          </dl>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            No fills in this period had a valid priority-pressure reading at the same station within the preceding 15 minutes.
+          </p>
+        )}
       </DashboardPanel>
     </div>
   )

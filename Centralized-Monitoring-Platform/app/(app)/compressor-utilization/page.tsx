@@ -319,11 +319,13 @@ export default async function CompressorUtilizationPage({ searchParams }: Compre
         description="Time-weighted average actual discharge flow / rated discharge flow x 100."
       >
         <p className="text-sm text-muted-foreground">
-          Not configured. The Prisma schema has possible actual-flow fields, including
-          `icl_compressor_readings.discharge_flow_rate`, `tulip_compressor_readings.discharge_flow`,
-          and Bukt FIT current-flow fields, but their station/equipment mapping and units need validation.
-          Rated flow capacity by compressor is not stored in the schema. Capacity utilization will remain
-          unavailable until actual-flow sources, units, and rated values are supplied.
+          Actual flow fields are `icl_compressor_readings.discharge_flow_rate`,
+          `tulip_compressor_readings.discharge_flow` (or `suction_flow` where that is the available
+          compressor flow), and `compressor_suction_flow` in the KPCL compressor tables. Bukt readings
+          provide FIT current-flow fields. The flow units and per-compressor rated discharge capacities
+          are not recorded in the project, so a percentage cannot be calculated reliably yet. Rated
+          capacity must come from each compressor or flow-meter nameplate/specification; it cannot be
+          inferred from observed operating flow.
         </p>
       </DashboardPanel>
     </div>
