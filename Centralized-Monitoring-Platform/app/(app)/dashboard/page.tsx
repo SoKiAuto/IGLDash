@@ -293,10 +293,10 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
         label: getStationName(row.station),
         values: { vehicles: row.vehicles, kg: row.kg },
         details: {
-          vehicles: `${formatInteger(row.kg)} kg Â· ${formatInteger(
+          vehicles: `${formatInteger(row.kg)} kg · ${formatInteger(
             row.activeDays > 0 ? row.vehicles / row.activeDays : 0
           )} per active day`,
-          kg: `${formatInteger(row.vehicles)} vehicles Â· ${perVehicle(row.kg, row.vehicles)} kg per vehicle`,
+          kg: `${formatInteger(row.vehicles)} vehicles · ${perVehicle(row.kg, row.vehicles)} kg per vehicle`,
         },
         uptime: uptimeByStation.get(row.station) ?? null,
       }))
@@ -307,7 +307,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
           values: { vehicles: row.fills, kg },
           details: {
             vehicles: `Full-fill rate ${formatPercent(percentOf(row.fullFills, row.fills) ?? 0)}`,
-            kg: `${formatInteger(row.fills)} fills Â· ${perVehicle(kg, row.fills)} kg per fill`,
+            kg: `${formatInteger(row.fills)} fills · ${perVehicle(kg, row.fills)} kg per fill`,
           },
         }
       })
@@ -344,11 +344,11 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
-        <ExportContextSetter context={`${stationLabel} Â· ${formatDate(range.from)} to ${formatDate(range.to)}`} />
+        <ExportContextSetter context={`${stationLabel} · ${formatDate(range.from)} to ${formatDate(range.to)}`} />
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Overview</h1>
           <p className="text-sm text-muted-foreground">
-            {stationLabel} Â· {formatDate(range.from)} to {formatDate(range.to)}
+            {stationLabel} · {formatDate(range.from)} to {formatDate(range.to)}
           </p>
         </div>
         <RangeSelector />
@@ -410,7 +410,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
         <div className="xl:col-span-2">
           <DashboardPanel
             title="Fills by vehicle class"
-            description={`Estimated from fill size, not recorded by the dispenser. ${describeVehicleClassRanges().join(" Â· ")}.`}
+            description={`Estimated from fill size, not recorded by the dispenser. ${describeVehicleClassRanges().join(" · ")}.`}
             href={link("/full-fill")}
             linkLabel="Full-fill rate"
             contentAlign="end"
