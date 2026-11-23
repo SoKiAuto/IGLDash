@@ -9,6 +9,7 @@ import { CHART_COLORS } from "@/lib/chart-colors"
 import { getDashboardFilters } from "@/lib/dashboard-filters"
 import type { DateRange } from "@/lib/date-range"
 import { formatDate, formatDecimal, formatInteger, formatPercent } from "@/lib/format"
+import { getRatedCompressorFlow } from "@/lib/compressor-flow-capacity"
 import { getComparisonRange, pointChange, relativeChange } from "@/lib/overview"
 import {
   getCompressorDailyRuns,
@@ -326,13 +327,17 @@ export default async function CompressorUtilizationPage({ searchParams }: Compre
             columns={[
               { key: "station", label: "Station", align: "left" },
               { key: "compressor", label: "Compressor", align: "left" },
-              { key: "actual", label: "Avg actual flow · source unit" },
+              { key: "actual", label: "Avg actual flow · assumed SCMH" },
               { key: "coverage", label: "Flow coverage" },
               { key: "rated", label: "Rated flow" },
               { key: "utilization", label: "Capacity utilization" },
             ]}
             rows={flowRows.map((row) => {
               const label = parseCompressorUnit(row.unit).label
+              const ratedFlow = getRatedCompressorFlow(row.unit)
+              const capacityUtilization = ratedFlow
+                ? (row.averageFlow / ratedFlow.capacity) * 100
+                : null
               return {
                 id: `${row.station}|${row.unit}`,
                 cells: {
@@ -340,8 +345,14 @@ export default async function CompressorUtilizationPage({ searchParams }: Compre
                   compressor: { text: label, sort: label },
                   actual: { text: formatDecimal(row.averageFlow), sort: row.averageFlow },
                   coverage: { text: `${formatDecimal(row.coveredHours)} h`, sort: row.coveredHours },
-                  rated: { text: "--", sort: 0 },
-                  utilization: { text: "--", sort: 0 },
+                  rated: {
+                    text: ratedFlow ? `~${formatInteger(ratedFlow.capacity)} SCMH` : "--",
+                    sort: ratedFlow?.capacity ?? 0,
+                  },
+                  utilization: {
+                    text: capacityUtilization === null ? "--" : formatPercent(capacityUtilization),
+                    sort: capacityUtilization ?? 0,
+                  },
                 },
               }
             })}
@@ -356,8 +367,9 @@ export default async function CompressorUtilizationPage({ searchParams }: Compre
         <p className="mt-3 text-sm text-muted-foreground">
           Actual flow uses ICL discharge flow, Tulip discharge flow (falling back to suction flow),
           KPCL compressor suction flow, and summed Bukt FIT current-flow readings. A stale gap over
-          15 minutes is excluded. Flow units differ by source and are shown as recorded. Rated flow
-          is not in the data; it needs each compressor’s nameplate/specification to calculate utilization.
+          15 minutes is excluded. Flow values are assumed to be SCMH. Rated flow is estimated from
+          600M/1200 equipment tags; ICL is provisionally estimated at 450 SCMH. Verify these values
+          against each installed compressor’s nameplate before using the percentages for reporting.
         </p>
       </DashboardPanel>
     </div>
