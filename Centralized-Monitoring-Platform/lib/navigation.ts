@@ -34,12 +34,12 @@ export function isNavigationGroup(entry: NavigationEntry): entry is NavigationGr
 }
 
 export const MONITORING_ITEMS: NavigationEntry[] = [
+  { title: "Exception management", href: "/exceptions", icon: TriangleAlert },
   { title: "Overview", href: "/dashboard", icon: LayoutDashboard },
   { title: "Map view", href: "/map", icon: MapPin },
   { title: "Daily vehicles", href: "/vehicles", icon: Car },
   { title: "Full-fill rate", href: "/full-fill", icon: Fuel },
   { title: "Station uptime", href: "/uptime", icon: Activity },
-  { title: "Exception management", href: "/exceptions", icon: TriangleAlert },
   {
     title: "Outages",
     icon: Zap,
